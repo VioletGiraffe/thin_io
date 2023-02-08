@@ -28,6 +28,8 @@ jobs:
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v2
+      with:
+        archives: 'qttools'
 
     - name: Windows - setup MSBuild
       if: startsWith(matrix.os, 'windows')
@@ -39,6 +41,7 @@ jobs:
       run: |
         %Qt5_DIR%\bin\qmake.exe -v
         call "%programfiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        pushd tests
         %Qt5_DIR%\bin\qmake.exe -tp vc -r
         msbuild /t:Build /p:Configuration=Release;PlatformToolset=v143
 
@@ -47,6 +50,7 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: |
         clang --version
+        pushd tests
         $Qt5_DIR/bin/qmake -r
         make -j
 
@@ -54,23 +58,23 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu')
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: |
-        sudo apt update -y; sudo apt install -qq gcc-11 g++-11
-        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 50
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 50
+        sudo apt update -y; sudo apt install -qq gcc-12 g++-12
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-112 50
         g++ --version
-
+        pushd tests
         $Qt5_DIR/bin/qmake -r
         make -j
 
-    # - name: Test run
-    #   if: startsWith(matrix.os, 'macos')
-    #   run: ./tests/bin/tests.app/Contents/MacOS/tests
+    - name: Test run
+      if: startsWith(matrix.os, 'macos')
+      run: ./tests/bin/tests.app/Contents/MacOS/thin_io_testapp
       
-    # - name: Test run
-    #   if: startsWith(matrix.os, 'ubuntu')
-    #   run: ./tests/bin/tests
+    - name: Test run
+      if: startsWith(matrix.os, 'ubuntu')
+      run: ./tests/bin/thin_io_testapp
 
-    # - name: Test run
-    #   if: startsWith(matrix.os, 'widows')
-    #   run: ./tests/bin/tests.exe
+    - name: Test run
+      if: startsWith(matrix.os, 'widows')
+      run: ./tests/bin/thin_io_testapp.exe
     
