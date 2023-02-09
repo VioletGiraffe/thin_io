@@ -27,7 +27,7 @@ jobs:
         submodules: 'recursive'
 
     - name: Install Qt
-      uses: jurplel/install-qt-action@v2
+      uses: jurplel/install-qt-action@v3
       with:
         archives: 'qttools'
 
