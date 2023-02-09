@@ -29,7 +29,7 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        archives: 'qttools'
+        archives: 'qtbase'
 
     - name: Windows - setup MSBuild
       if: startsWith(matrix.os, 'windows')
@@ -76,5 +76,5 @@ jobs:
 
     - name: Test run
       if: startsWith(matrix.os, 'windows')
-      run: ./tests/bin/thin_io_testapp.exe
+      run: ./tests/bin/release/thin_io_testapp.exe
     
