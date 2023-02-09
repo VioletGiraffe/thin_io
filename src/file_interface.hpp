@@ -1,5 +1,7 @@
 #pragma once
+#include <optional>
 #include <stdint.h>
+#include <string>
 
 namespace thin_io {
 
@@ -20,41 +22,79 @@ public:
 		return _impl.open(path, openMode, cacheMode, sharingMode);
 	}
 
-	inline bool is_open() const noexcept {
+	inline static file_interface create(const char* path,
+		file_definitions::open_mode openMode,
+		file_definitions::sys_cache_mode cacheMode = file_definitions::CachingEnabled,
+		file_definitions::sharing_mode sharingMode = file_definitions::ShareRead
+	) noexcept {
+		file_interface<Impl> f;
+		f.open(path, openMode, cacheMode, sharingMode);
+		return f;
+	}
+
+	[[nodiscard]] inline bool is_open() const noexcept {
 		return _impl.is_open();
+	}
+
+	[[nodiscard]] inline operator bool() const noexcept {
+		return is_open();
 	}
 
 	inline bool close() noexcept {
 		return _impl.close();
 	}
 
-	inline uint64_t read(void* dest, uint64_t size) noexcept {
+	inline std::optional<uint64_t> read(void* dest, uint64_t size) noexcept {
 		return _impl.read(dest, size);
 	}
 
-	inline uint64_t write(const void* dest, uint64_t size) noexcept {
+	inline std::optional<uint64_t> write(const void* dest, uint64_t size) noexcept {
 		return _impl.write(dest, size);
 	}
 
-	inline int64_t pos() const noexcept {
+	// !!!
+	// NOTE: Win32: the position of the file will be altered; Linux / POSIX: the position is NOT altered
+	// !!!
+	inline std::optional<uint64_t> pread(void* dest, uint64_t size, uint64_t pos) noexcept {
+		return _impl.pread(dest, size, pos);
+	}
+
+	inline std::optional<uint64_t> pwrite(const void* dest, uint64_t size, uint64_t pos) noexcept {
+		return _impl.pwrite(dest, size, pos);
+	}
+
+	[[nodiscard]] inline std::optional<uint64_t> pos() const noexcept {
 		return _impl.pos();
 	}
-	// Sets the absolute file position.
-	// The argument is signed, but must be non-negative!
-	inline bool setPos(int64_t newPos) noexcept {
+
+	// Sets the absolute file position. Do not use this call in new code, use pread / pwrite instead.
+	inline bool setPos(uint64_t newPos) noexcept {
 		return _impl.setPos(newPos);
 	}
 
 	// This function also sets file position to the end
-	inline bool truncate(int64_t newFileSize) noexcept {
+	// 
+	// !!!
+	// Does not change file pointer on Windows!
+	// !!!
+	inline bool truncate(uint64_t newFileSize) noexcept {
 		return _impl.truncate(newFileSize);
 	}
 
-	inline int64_t size() const noexcept {
+	[[nodiscard]] inline bool fsync() noexcept {
+		return _impl.fsync();
+	}
+
+	[[nodiscard]] inline bool fdatasync() noexcept {
+		return _impl.fdatasync();
+	}
+
+	// Negative value means an error querying the size
+	inline std::optional<uint64_t> size() const noexcept {
 		return _impl.size();
 	}
 
-	inline bool atEnd() const noexcept {
+	[[nodiscard]] inline bool atEnd() const noexcept {
 		return _impl.atEnd();
 	}
 
@@ -63,8 +103,13 @@ public:
 	}
 
 	// Beware, it's OS-specific!
-	static inline auto error_code() noexcept {
+	[[nodiscard]] static inline auto error_code() noexcept {
 		return Impl::error_code();
+	}
+
+	// Beware, it's OS-specific!
+	[[nodiscard]] static inline std::string text_for_error(decltype(Impl::error_code()) ec) noexcept {
+		return Impl::text_for_error(ec);
 	}
 
 private:

@@ -6,6 +6,25 @@ using namespace thin_io;
 
 static_assert(sizeof(file_impl) == sizeof(HANDLE)); // Empty base optimiation test
 
+#if !(defined(THIN_IO_WANT_FDATASYNC) && THIN_IO_WANT_FDATASYNC == 0)
+struct IO_STATUS_BLOCK {
+	union {
+		NTSTATUS Status;
+		PVOID    Pointer;
+	};
+	ULONG_PTR Information;
+};
+
+using NtFlushBuffersFileEx_t = NTSTATUS(__stdcall*) (HANDLE, ULONG, PVOID, ULONG, IO_STATUS_BLOCK*);
+static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileEx_t {
+	auto* lib = ::LoadLibraryA("ntdll.dll");
+	if (!lib)
+		return nullptr;
+	auto* func = ::GetProcAddress(lib, "NtFlushBuffersFileEx");
+	return (NtFlushBuffersFileEx_t)func;
+}();
+#endif
+
 [[nodiscard]] inline constexpr DWORD accessMask(file_definitions::open_mode mode)
 {
 	DWORD access = 0;
@@ -30,9 +49,12 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE)); // Empty base optimiation te
 	}
 }
 
-[[nodiscard]] inline constexpr DWORD shareMask(file_definitions::sharing_mode mode)
+[[nodiscard]] inline constexpr DWORD shareMask(file_definitions::open_mode openMode, file_definitions::sharing_mode sharing)
 {
-	return mode;
+	if (openMode == file_definitions::Read)
+		return sharing | file_definitions::ShareWrite; // Add permission to read files open for writing with SHARE_READ only
+	else
+		return sharing; // Otherwise no change to permissions
 }
 
 [[nodiscard]] inline constexpr DWORD flags(file_definitions::sys_cache_mode cacheMode)
@@ -49,7 +71,7 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 
 	_h = ::CreateFileA(path,
 					   accessMask(openMode),
-					   shareMask(sharingMode),
+					   shareMask(openMode, sharingMode),
 					   nullptr, // Security attrs
 					   creationMode(openMode),
 					   flags(cacheMode),
@@ -70,56 +92,98 @@ bool file_impl::close() noexcept
 		return false;
 }
 
-uint64_t file_impl::read(void *dest, uint64_t size) noexcept
+std::optional<uint64_t> file_impl::read(void *dest, uint64_t size) noexcept
 {
 	DWORD bytesRead = 0;
-	::ReadFile(_h, dest, (DWORD)size, &bytesRead, nullptr);
-	return bytesRead;
+	return ::ReadFile(_h, dest, (DWORD)size, &bytesRead, nullptr) ?
+			bytesRead : std::optional<uint64_t>{};
 }
 
-uint64_t file_impl::write(const void *src, uint64_t size) noexcept
+std::optional<uint64_t> file_impl::write(const void *src, uint64_t size) noexcept
 {
 	DWORD bytesWritten = 0;
-	::WriteFile(_h, src, (DWORD)size, &bytesWritten, nullptr);
-	return bytesWritten;
+	return ::WriteFile(_h, src, (DWORD)size, &bytesWritten, nullptr) ?
+				bytesWritten : std::optional<uint64_t>{};
 }
 
-int64_t file_impl::size() const noexcept
+std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos) noexcept
+{
+	DWORD bytesRead = 0;
+	OVERLAPPED o;
+	o.Internal = 0;
+	o.InternalHigh = 0;
+	o.hEvent = 0;
+
+	o.OffsetHigh = static_cast<DWORD>(pos >> 32);
+	o.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFu);
+	return ::ReadFile(_h, dest, (DWORD)size, &bytesRead, &o) ?
+			bytesRead : std::optional<uint64_t>{};
+}
+
+std::optional<uint64_t> file_impl::pwrite(const void *src, uint64_t size, uint64_t pos) noexcept
+{
+	DWORD bytesWritten = 0;
+	OVERLAPPED o;
+	o.Internal = 0;
+	o.InternalHigh = 0;
+	o.hEvent = 0;
+
+	o.OffsetHigh = static_cast<DWORD>(pos >> 32);
+	o.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFu);
+	return ::WriteFile(_h, src, (DWORD)size, &bytesWritten, &o) ?
+			bytesWritten : std::optional<uint64_t>{};
+}
+
+std::optional<uint64_t> file_impl::size() const noexcept
 {
 	LARGE_INTEGER li;
-	if (::GetFileSizeEx(_h, &li) != FALSE) [[likely]]
-		return li.QuadPart;
-
-	return 0;
+	return ::GetFileSizeEx(_h, &li) != FALSE ?
+			static_cast<uint64_t>(li.QuadPart): std::optional<uint64_t>{};
 }
 
-int64_t file_impl::pos() const noexcept
+std::optional<uint64_t> file_impl::pos() const noexcept
 {
 	LARGE_INTEGER offset = {0};
-	LARGE_INTEGER pos = {0};
-	if (::SetFilePointerEx(_h, offset, &pos, FILE_CURRENT) != 0) [[likely]]
-		return pos.QuadPart;
-
-	return 0;
+	LARGE_INTEGER pos;
+	return ::SetFilePointerEx(_h, offset, &pos, FILE_CURRENT) != 0 ?
+			static_cast<uint64_t>(pos.QuadPart) : std::optional<uint64_t>{};
 }
 
-bool file_impl::setPos(int64_t newPos) noexcept
+bool file_impl::setPos(uint64_t newPos) noexcept
 {
 	LARGE_INTEGER offset;
-	offset.QuadPart = newPos;
-	LARGE_INTEGER pos;
-	if (::SetFilePointerEx(_h, offset, &pos, FILE_BEGIN) != 0) [[likely]]
-		return true;
-
-	return false;
+	offset.QuadPart = static_cast<LONGLONG>(newPos);
+	return ::SetFilePointerEx(_h, offset, nullptr, FILE_BEGIN) != 0;
 }
 
 // This function also sets file position to the end
-bool file_impl::truncate(int64_t newFileSize) noexcept
+bool file_impl::truncate(uint64_t newFileSize) noexcept
 {
-	if (!setPos(newFileSize))
-		return false;
-	return ::SetEndOfFile(_h) != 0;
+	// TODO: a better way is SetFileInformationByHandle with FileEndOfFileInfo
+	FILE_END_OF_FILE_INFO eof;
+	eof.EndOfFile.QuadPart = static_cast<LONGLONG>(newFileSize);
+	return ::SetFileInformationByHandle(_h, FileEndOfFileInfo, &eof, sizeof(eof)) != 0;
+}
+
+bool file_impl::fsync() noexcept
+{
+	return ::FlushFileBuffers(_h) != 0;
+}
+
+bool file_impl::fdatasync() noexcept
+{
+#if !(defined(THIN_IO_WANT_FDATASYNC) && THIN_IO_WANT_FDATASYNC == 0)
+	static constexpr NTSTATUS STATUS_SUCCESS = 0;
+
+	IO_STATUS_BLOCK iosb;
+	::memset(&iosb, 0, sizeof(&iosb));
+	if (NtFlushBuffersFileEx && NtFlushBuffersFileEx(_h, FLUSH_FLAGS_FILE_DATA_SYNC_ONLY, nullptr, 0, &iosb) == STATUS_SUCCESS)
+		return true;
+	else
+		return fsync(); // Could be unsupported target filesystem
+#else
+	return fsync();
+#endif
 }
 
 bool file_impl::atEnd() const noexcept
@@ -130,6 +194,27 @@ bool file_impl::atEnd() const noexcept
 uint32_t file_impl::error_code() noexcept
 {
 	return ::GetLastError();
+}
+
+std::string file_impl::text_for_error(uint32_t ec) noexcept
+{
+	std::string text(255, '\0');
+	const auto nCharsWritten = ::FormatMessageA(
+		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+		nullptr,
+		ec,
+		MAKELANGID(LANG_ENGLISH, SUBLANG_DEFAULT),
+		text.data(),
+		static_cast<DWORD>(text.size() - 1),
+		nullptr);
+
+	if (nCharsWritten > 0)
+	{
+		text.resize(nCharsWritten);
+		return text;
+	}
+	else
+		return std::string{ "Failed to format error code with FormatMessageA!" };
 }
 
 bool file_impl::deleteFile(const char *filePath) noexcept

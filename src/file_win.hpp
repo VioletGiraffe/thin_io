@@ -2,7 +2,6 @@
 #include "file_interface.hpp"
 
 #include <stddef.h>
-#include <stdint.h>
 
 using HANDLE = void*;
 
@@ -16,6 +15,8 @@ public:
 	inline file_impl(file_impl&& other) noexcept;
 	inline ~file_impl() noexcept;
 
+	inline file_impl& operator=(file_impl&& other) noexcept;
+
 	bool open(const char* path, open_mode openMode,
 			  sys_cache_mode cacheMode,
 			  file_definitions::sharing_mode sharingMode) noexcept;
@@ -25,23 +26,31 @@ public:
 
 	[[nodiscard]] inline bool is_open() const noexcept;
 
-	uint64_t read(void* dest, uint64_t size) noexcept;
-	uint64_t write(const void* src, uint64_t size) noexcept;
+	std::optional<uint64_t> read(void* dest, uint64_t size) noexcept;
+	std::optional<uint64_t> write(const void* src, uint64_t size) noexcept;
 
-	int64_t pos() const noexcept;
-	// Sets the absolute file position.
-	// The argument is signed, but must be non-negative!
-	bool setPos(int64_t newPos) noexcept;
+	// Note: the position of the file will be altered!
+	std::optional<uint64_t> pread(void* dest, uint64_t size, uint64_t pos) noexcept;
+	std::optional<uint64_t> pwrite(const void* src, uint64_t size, uint64_t pos) noexcept;
+
+	[[nodiscard]] std::optional<uint64_t> pos() const noexcept;
+	// Sets the absolute file position. Do not use this call in new code, use pread / pwrite instead.
+	bool setPos(uint64_t newPos) noexcept;
 
 	// This function also sets file position to the end
-	bool truncate(int64_t newFileSize) noexcept;
+	bool truncate(uint64_t newFileSize) noexcept;
 
-	int64_t size() const noexcept;
-	bool atEnd() const noexcept;
+	[[nodiscard]] bool fsync() noexcept;
+	[[nodiscard]] bool fdatasync() noexcept;
 
-	static uint32_t error_code() noexcept;
+
+	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
+	[[nodiscard]] bool atEnd() const noexcept;
 
 	static bool deleteFile(const char* filePath) noexcept;
+
+	[[nodiscard]] static uint32_t error_code() noexcept;
+	[[nodiscard]] static std::string text_for_error(uint32_t ec) noexcept;
 
 private:
 	static constexpr auto invalid_handle = (HANDLE)(~size_t{0});
@@ -55,6 +64,14 @@ inline file_impl::file_impl(file_impl &&other) noexcept : _h{other._h} {
 inline file_impl::~file_impl() noexcept
 {
 	close();
+}
+
+inline file_impl& file_impl::operator=(file_impl&& other) noexcept
+{
+	close();
+	_h = other._h;
+	other._h = invalid_handle;
+	return *this;
 }
 
 inline bool file_impl::is_open() const noexcept
