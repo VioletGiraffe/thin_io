@@ -196,3 +196,5 @@ Makefile.Release
 .DS_Store
 
 *.8-pre1
+
+Makefile.thin_io
