@@ -7,6 +7,14 @@
 
 using namespace thin_io;
 
+#ifdef _WIN32
+#define REQUIRE_LINUX(...) (void)0
+#define REQUIRE_WIN(...) REQUIRE(__VA_ARGS__)
+#else
+#define REQUIRE_WIN(...) (void)0
+#define REQUIRE_LINUX(...) REQUIRE(__VA_ARGS__)
+#endif
+
 TEST_CASE("basic file functionality", "[file]")
 {
 try {
@@ -149,7 +157,6 @@ TEST_CASE("Navigating a file - read+write", "[file]")
 {
 try {
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
-	static constexpr const char testString2[] = "The quick brown dog jumps over the lazy dog";
 	static constexpr const char testFilePath[] = "test.file";
 
 	file::deleteFile(testFilePath);
@@ -287,7 +294,8 @@ try {
 	REQUIRE(f.read(buf, 0).has_value());
 	REQUIRE(f.read(buf, 1).has_value());
 	REQUIRE(f.read(buf, 1) == 0);
-	REQUIRE(f.read(buf, 10000000).has_value() == false);
+	REQUIRE_WIN(f.read(buf, 10000000).has_value() == false);
+	REQUIRE_LINUX(f.read(buf, 10000000).value() == 0);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
 	REQUIRE(f.atEnd());

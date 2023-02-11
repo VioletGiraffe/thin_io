@@ -8,7 +8,7 @@ namespace thin_io {
 struct file_definitions {
 	enum open_mode {Read = 1, Write = 2, ReadWrite = 3};
 	enum sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
-	enum sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4};
+	enum sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = 8};
 };
 
 template <class Impl>

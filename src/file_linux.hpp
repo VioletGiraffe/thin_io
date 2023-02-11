@@ -1,13 +1,8 @@
 #pragma once
 #include "file_interface.hpp"
 
-#include <stddef.h>
-
-using HANDLE = void*;
 
 namespace thin_io {
-
-using error_code = uint32_t;
 
 class file_impl : public file_definitions {
 public:
@@ -49,16 +44,15 @@ public:
 
 	static bool deleteFile(const char* filePath) noexcept;
 
-	[[nodiscard]] static uint32_t error_code() noexcept;
+	[[nodiscard]] static int error_code() noexcept;
 	[[nodiscard]] static std::string text_for_error(int ec) noexcept;
 
 private:
-	static constexpr auto invalid_handle = (HANDLE)(~size_t{0});
-	HANDLE _h = invalid_handle;
+	int _fd = -1;
 };
 
-inline file_impl::file_impl(file_impl &&other) noexcept : _h{other._h} {
-	other._h = nullptr;
+inline file_impl::file_impl(file_impl &&other) noexcept : _fd{other._fd} {
+	other._fd = -1;
 }
 
 inline file_impl::~file_impl() noexcept
@@ -69,14 +63,14 @@ inline file_impl::~file_impl() noexcept
 inline file_impl& file_impl::operator=(file_impl&& other) noexcept
 {
 	close();
-	_h = other._h;
-	other._h = invalid_handle;
+	_fd = other._fd;
+	other._fd = -1;
 	return *this;
 }
 
 inline bool file_impl::is_open() const noexcept
 {
-	return _h != invalid_handle;
+	return _fd != -1;
 }
 
 }

@@ -1,7 +1,7 @@
 TEMPLATE = subdirs
 CONFIG += ordered
 
-SUBDIRS = cpp-template-utils thin_io thin_io_testapp
+SUBDIRS = thin_io_testapp cpp-template-utils thin_io
 
 exists($${PWD}/../cpp-template-utils) {
 	SUBREPOS_DIR=$${PWD}/..
