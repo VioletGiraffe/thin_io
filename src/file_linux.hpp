@@ -30,7 +30,7 @@ public:
 
 	[[nodiscard]] std::optional<uint64_t> pos() const noexcept;
 	// Sets the absolute file position. Do not use this call in new code, use pread / pwrite instead.
-	bool setPos(uint64_t newPos) noexcept;
+	bool set_pos(uint64_t newPos) noexcept;
 
 	// This function also sets file position to the end
 	bool truncate(uint64_t newFileSize) noexcept;
@@ -40,9 +40,9 @@ public:
 
 
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
-	[[nodiscard]] bool atEnd() const noexcept;
+	[[nodiscard]] bool at_end() const noexcept;
 
-	static bool deleteFile(const char* filePath) noexcept;
+	static bool delete_file(const char* filePath) noexcept;
 
 	[[nodiscard]] static int error_code() noexcept;
 	[[nodiscard]] static std::string text_for_error(int ec) noexcept;

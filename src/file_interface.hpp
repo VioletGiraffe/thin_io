@@ -68,8 +68,8 @@ public:
 	}
 
 	// Sets the absolute file position. Do not use this call in new code, use pread / pwrite instead.
-	inline bool setPos(uint64_t newPos) noexcept {
-		return _impl.setPos(newPos);
+	inline bool set_pos(uint64_t newPos) noexcept {
+		return _impl.set_pos(newPos);
 	}
 
 	// This function also sets file position to the end
@@ -94,12 +94,12 @@ public:
 		return _impl.size();
 	}
 
-	[[nodiscard]] inline bool atEnd() const noexcept {
-		return _impl.atEnd();
+	[[nodiscard]] inline bool at_end() const noexcept {
+		return _impl.at_end();
 	}
 
-	static bool deleteFile(const char* filePath) noexcept {
-		return Impl::deleteFile(filePath);
+	static bool delete_file(const char* filePath) noexcept {
+		return Impl::delete_file(filePath);
 	}
 
 	// Beware, it's OS-specific!

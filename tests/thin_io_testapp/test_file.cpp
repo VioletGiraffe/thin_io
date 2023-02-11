@@ -20,7 +20,7 @@ TEST_CASE("basic file functionality", "[file]")
 try {
 	static constexpr const char testFilePath[] = "test.file";
 	{
-		file::deleteFile(testFilePath);
+		file::delete_file(testFilePath);
 
 		file f;
 		REQUIRE(!f);
@@ -47,7 +47,7 @@ try {
 	}
 
 	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 catch (...) {
 	FAIL("file must not throw!");
@@ -60,7 +60,7 @@ try {
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
 	static constexpr const char testFilePath[] = "test.file";
 
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	{
 		file f;
@@ -68,7 +68,7 @@ try {
 		REQUIRE(f.write(testString, sizeof(testString)));
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.pos() == f.size());
-		REQUIRE(f.atEnd());
+		REQUIRE(f.at_end());
 		REQUIRE(f.close());
 	}
 
@@ -76,34 +76,34 @@ try {
 		file f;
 		REQUIRE(f.open(testFilePath, file::Read));
 		REQUIRE(f.pos() == 0);
-		REQUIRE(f.atEnd() == false);
-		REQUIRE(f.setPos(16));
+		REQUIRE(f.at_end() == false);
+		REQUIRE(f.set_pos(16));
 		REQUIRE(f.pos() == 16);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 
 		char buf[sizeof(testString)] = {0};
 		REQUIRE(f.read(buf, 3) == 3);
 		REQUIRE(::memcmp(buf, "fox", 3) == 0);
 
-		REQUIRE(f.setPos(sizeof(testString)));
+		REQUIRE(f.set_pos(sizeof(testString)));
 		REQUIRE(f.pos() == sizeof(testString));
-		REQUIRE(f.atEnd() == true);
+		REQUIRE(f.at_end() == true);
 
-		REQUIRE(f.setPos(40));
+		REQUIRE(f.set_pos(40));
 		REQUIRE(f.pos() == 40);
 		REQUIRE(f.size() == sizeof(testString));
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		memset(buf, ' ', sizeof(buf));
 		REQUIRE(f.read(buf, 4) == 4);
 		REQUIRE(::memcmp(buf, "dog", 4 /* with null terminator */) == 0);
 		REQUIRE(f.pos() == 44);
-		REQUIRE(f.atEnd() == true);
+		REQUIRE(f.at_end() == true);
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.close());
 	}
 
 	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 catch (...) {
 	FAIL("file must not throw!");
@@ -117,7 +117,7 @@ try {
 	static constexpr const char testString2[] = "The quick brown dog jumps over the lazy dog";
 	static constexpr const char testFilePath[] = "test.file";
 
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	{
 		file f;
@@ -125,13 +125,13 @@ try {
 		REQUIRE(f.write(testString, sizeof(testString)));
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.pos() == f.size());
-		REQUIRE(f.atEnd());
-		REQUIRE(f.setPos(16));
+		REQUIRE(f.at_end());
+		REQUIRE(f.set_pos(16));
 		REQUIRE(f.pos() == 16);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(f.write("dog", 3));
 		REQUIRE(f.pos() == 16+3);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(f.close());
 	}
 
@@ -139,20 +139,20 @@ try {
 		file f;
 		REQUIRE(f.open(testFilePath, file::Read));
 		REQUIRE(f.pos() == 0);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 
 		char buf[sizeof(testString)] = {0};
 		REQUIRE(f.read(buf, sizeof(testString)) == sizeof(testString));
 		REQUIRE(::memcmp(buf, testString2, sizeof(testString)) == 0);
 
 		REQUIRE(f.pos() == sizeof(testString));
-		REQUIRE(f.atEnd() == true);
+		REQUIRE(f.at_end() == true);
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.close());
 	}
 
 	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 catch (...) {
 	FAIL("file must not throw!");
@@ -165,7 +165,7 @@ try {
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
 	static constexpr const char testFilePath[] = "test.file";
 
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	{
 		file f;
@@ -173,7 +173,7 @@ try {
 		REQUIRE(f.write(testString, sizeof(testString)));
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.pos() == f.size());
-		REQUIRE(f.atEnd());
+		REQUIRE(f.at_end());
 		REQUIRE(f.close());
 	}
 
@@ -182,47 +182,47 @@ try {
 		REQUIRE(f.open(testFilePath, file::ReadWrite));
 		REQUIRE(f.pos() == 0);
 		REQUIRE(f.size() == sizeof(testString));
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 
 		char buf[sizeof(testString)] = {0};
 		REQUIRE(f.read(buf, sizeof(testString)) == sizeof(testString));
 		REQUIRE(::memcmp(buf, testString, sizeof(testString)) == 0);
 
 		REQUIRE(f.pos() == sizeof(testString));
-		REQUIRE(f.atEnd() == true);
+		REQUIRE(f.at_end() == true);
 		REQUIRE(f.size() == sizeof(testString));
 
-		REQUIRE(f.setPos(16));
+		REQUIRE(f.set_pos(16));
 		REQUIRE(f.pos() == 16);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(f.size() == sizeof(testString));
 		memset(buf, ' ', sizeof(buf));
 		REQUIRE(f.read(buf, 3) == 3);
 
 		REQUIRE(f.pos() == 19);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(::memcmp(buf, "fox", 3) == 0);
 
-		REQUIRE(f.setPos(16));
+		REQUIRE(f.set_pos(16));
 		REQUIRE(f.pos() == 16);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.write("dog", 3));
 		REQUIRE(f.pos() == 16+3);
-		REQUIRE(f.atEnd() == false);
-		REQUIRE(f.setPos(16));
+		REQUIRE(f.at_end() == false);
+		REQUIRE(f.set_pos(16));
 		REQUIRE(f.pos() == 16);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(f.read(buf, 3) == 3);
 		REQUIRE(f.pos() == 19);
-		REQUIRE(f.atEnd() == false);
+		REQUIRE(f.at_end() == false);
 		REQUIRE(::memcmp(buf, "dog", 3) == 0);
 
 		REQUIRE(f.close());
 	}
 
 	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 catch (...) {
 	FAIL("file must not throw!");
@@ -234,34 +234,34 @@ TEST_CASE("truncate", "[file]")
 try {
 	static constexpr const char testFilePath[] = "test.file";
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	file f;
 
 	REQUIRE(f.open("test.file", file::ReadWrite) == true);
 	REQUIRE(f.write(testString, std::size(testString)) == std::size(testString));
-	REQUIRE(f.atEnd());
+	REQUIRE(f.at_end());
 	REQUIRE(f.size() == sizeof(testString));
 	REQUIRE(f.truncate(3));
-	//REQUIRE(f.atEnd()); - truncate does not change file pointer on Windows!
+	//REQUIRE(f.at_end()); - truncate does not change file pointer on Windows!
 	REQUIRE(f.size() == 3);
 	//REQUIRE(f.pos() == 3); - truncate does not change file pointer on Windows!
 	char buf[sizeof(testString)] = {0};
-	REQUIRE(f.setPos(0));
-	REQUIRE(!f.atEnd());
+	REQUIRE(f.set_pos(0));
+	REQUIRE(!f.at_end());
 	REQUIRE(f.read(buf, 3) == 3);
-	REQUIRE(f.atEnd());
+	REQUIRE(f.at_end());
 	REQUIRE(::memcmp(buf, "The", 3) == 0);
 
 	REQUIRE(f.truncate(0));
-	//REQUIRE(f.atEnd()); - truncate does not change file pointer on Windows!
+	//REQUIRE(f.at_end()); - truncate does not change file pointer on Windows!
 	REQUIRE(f.size() == 0);
 	//REQUIRE(f.pos() == 0);
 	REQUIRE(f.read(buf, 1) == 0);
 	REQUIRE(f.close());
 
 	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 catch (...) {
 	FAIL("file must not throw!");
@@ -272,18 +272,18 @@ TEST_CASE("Empty files", "[file]")
 {
 try {
 	static constexpr const char testFilePath[] = "test.file";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	file f;
 	REQUIRE(f.open(testFilePath, file::Write));
 	REQUIRE(f.is_open() == true);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
+	REQUIRE(f.at_end());
 	REQUIRE(f.write("", 0) == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
-	REQUIRE(f.setPos(0));
+	REQUIRE(f.at_end());
+	REQUIRE(f.set_pos(0));
 	REQUIRE(f.truncate(0));
 	REQUIRE(f.close());
 
@@ -291,10 +291,10 @@ try {
 	REQUIRE(f.is_open() == true);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
+	REQUIRE(f.at_end());
 	REQUIRE(f.write("", 0) == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
+	REQUIRE(f.at_end());
 	char buf[1];
 	REQUIRE(f.read(buf, 0) == 0);
 	REQUIRE(f.read(buf, 0).has_value());
@@ -304,8 +304,8 @@ try {
 	REQUIRE_LINUX(f.read(buf, 10000000).value() == 0);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
-	REQUIRE(f.setPos(100)); // The call succeeds - the file is read/write! Seek punches a hole.
+	REQUIRE(f.at_end());
+	REQUIRE(f.set_pos(100)); // The call succeeds - the file is read/write! Seek punches a hole.
 	REQUIRE(f.size() == 0);
 	REQUIRE(f.close());
 
@@ -314,18 +314,18 @@ try {
 	REQUIRE(f.is_open() == true);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
+	REQUIRE(f.at_end());
 	REQUIRE(f.read(buf, 0) == 0);
 	REQUIRE(f.read(buf, 1) == 0);
 	REQUIRE(f.size() == 0);
-	REQUIRE(f.atEnd());
-	REQUIRE(f.setPos(0));
-	REQUIRE(f.setPos(100));
+	REQUIRE(f.at_end());
+	REQUIRE(f.set_pos(0));
+	REQUIRE(f.set_pos(100));
 	REQUIRE(f.size() == 0);
-	//REQUIRE(f.atEnd());
+	//REQUIRE(f.at_end());
 	REQUIRE(f.close());
 
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 catch (...) {
 	FAIL("file must not throw!");
@@ -345,7 +345,7 @@ TEST_CASE("pread", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	REQUIRE(createTestFile(testFilePath, testString, sizeof(testString)));
 
@@ -360,14 +360,14 @@ TEST_CASE("pread", "[file]")
 	REQUIRE(::memcmp(buf, "dog", 4) == 0);
 	REQUIRE(f.close());
 
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 
 TEST_CASE("pwrite", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	file f;
 	REQUIRE(f.open(testFilePath, file::Write));
@@ -382,14 +382,14 @@ TEST_CASE("pwrite", "[file]")
 	REQUIRE(::memcmp(buf, "The small brown fox jumps over the lazy cat", sizeof(testString)) == 0);
 	REQUIRE(f.close());
 
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 
 TEST_CASE("write-read sharing", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	file fw;
 	REQUIRE(fw.open(testFilePath, file::Write));
@@ -404,14 +404,14 @@ TEST_CASE("write-read sharing", "[file]")
 	REQUIRE(fw.close());
 	REQUIRE(fr.close());
 
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 
 TEST_CASE("Factory method", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 
 	auto f = file::create(testFilePath, file::Write);
 	REQUIRE(f);
@@ -428,13 +428,13 @@ TEST_CASE("Factory method", "[file]")
 	REQUIRE(!f);
 	REQUIRE(::memcmp(buf, testString, sizeof(testString)) == 0);
 
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }
 
 TEST_CASE("Moving a file object", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";
-	file::deleteFile(testFilePath);
+	file::delete_file(testFilePath);
 	REQUIRE(createTestFile(testFilePath, "0", 0));
 
 	auto f = file::create(testFilePath, file::Read);
@@ -453,5 +453,5 @@ TEST_CASE("Moving a file object", "[file]")
 	REQUIRE(f3.close());
 	REQUIRE(!f3);
 
-	REQUIRE(file::deleteFile(testFilePath));
+	REQUIRE(file::delete_file(testFilePath));
 }

@@ -149,7 +149,7 @@ std::optional<uint64_t> file_impl::pos() const noexcept
 			static_cast<uint64_t>(pos.QuadPart) : std::optional<uint64_t>{};
 }
 
-bool file_impl::setPos(uint64_t newPos) noexcept
+bool file_impl::set_pos(uint64_t newPos) noexcept
 {
 	LARGE_INTEGER offset;
 	offset.QuadPart = static_cast<LONGLONG>(newPos);
@@ -186,7 +186,7 @@ bool file_impl::fdatasync() noexcept
 #endif
 }
 
-bool file_impl::atEnd() const noexcept
+bool file_impl::at_end() const noexcept
 {
 	return pos() == size();
 }
@@ -217,7 +217,7 @@ std::string file_impl::text_for_error(uint32_t ec) noexcept
 		return std::string{ "Failed to format error code with FormatMessageA!" };
 }
 
-bool file_impl::deleteFile(const char *filePath) noexcept
+bool file_impl::delete_file(const char *filePath) noexcept
 {
 	return ::DeleteFileA(filePath) != 0;
 }

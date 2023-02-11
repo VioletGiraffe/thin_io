@@ -91,7 +91,7 @@ std::optional<uint64_t> file_impl::pos() const noexcept
 	return pos >= 0 ? static_cast<uint64_t>(pos) : std::optional<uint64_t>{};
 }
 
-bool file_impl::setPos(uint64_t newPos) noexcept
+bool file_impl::set_pos(uint64_t newPos) noexcept
 {
 	const off64_t pos = ::lseek64(_fd, static_cast<off64_t>(newPos), SEEK_SET);
 	return pos == static_cast<off64_t>(newPos);
@@ -113,7 +113,7 @@ bool file_impl::fdatasync() noexcept
 	return ::fdatasync(_fd) == 0;
 }
 
-bool file_impl::atEnd() const noexcept
+bool file_impl::at_end() const noexcept
 {
 	return pos() == size();
 }
@@ -128,7 +128,7 @@ std::string file_impl::text_for_error(int ec) noexcept
 	return ::strerror(ec);
 }
 
-bool file_impl::deleteFile(const char *filePath) noexcept
+bool file_impl::delete_file(const char *filePath) noexcept
 {
 	return ::unlink(filePath) == 0;
 }
