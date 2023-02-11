@@ -1,4 +1,4 @@
-CONFIG += strict_c++ c++_latest # this is an intentional typo, c++_latest is not a valid specifier which leads qmake to NOT generate any -std=... flag at all, which is what I need
+CONFIG += strict_c++ c++2a
 
 CONFIG -= qt
 

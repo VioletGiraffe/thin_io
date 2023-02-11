@@ -8,12 +8,23 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#define O_LARGEFILE 0 // Not needed
+#define pread64 pread
+#define pwrite64 pwrite
+#define ftruncate64 ftruncate
+#define lseek64 lseek
+#define fstat64 fstat
+#define stat64 stat
+using off64_t = off_t;
+#endif
+
 using namespace thin_io;
 
 
 bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheMode, sharing_mode /*sharingMode*/) noexcept
 {
-	int flags = O_LARGEFILE;
+	int flags = 0;
 	switch (openMode) {
 	case Read:
 		flags |= O_RDONLY;
@@ -26,12 +37,13 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 		break;
 	}
 
+#ifdef __linux__
 	if (cacheMode == NoOsCaching) [[unlikely]]
 		flags |= O_DIRECT;
-
+#endif
 
 	// The mneaning if sharingMode mode flag is not the same as the Linux access mode. Ignoring sharing flags.
-	int access = 0;
+	int access = O_LARGEFILE;
 	if ((flags & O_CREAT) != 0) // The access parameter is ignored unless O_CREAT is specified
 	{
 		access |= (S_IRUSR | S_IRGRP | S_IROTH);
@@ -40,6 +52,15 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 	}
 
 	_fd = ::open(path, flags, access);
+
+#ifdef __APPLE__
+	if (cacheMode == NoOsCaching && is_open()) [[unlikely]]
+	{
+		fcntl(_fd, F_NOCACHE, 1);
+		fcntl(_fd, F_RDAHEAD, 0);
+	}
+#endif
+
 	return is_open();
 }
 
@@ -105,12 +126,20 @@ bool file_impl::truncate(uint64_t newFileSize) noexcept
 
 bool file_impl::fsync() noexcept
 {
+#ifndef __APPLE__
 	return ::fsync(_fd) == 0;
+#else
+	return ::fcntl(_fd, F_FULLFSYNC, 0) != -1;
+#endif
 }
 
 bool file_impl::fdatasync() noexcept
 {
+#ifndef __APPLE__
 	return ::fdatasync(_fd) == 0;
+#else
+	return fsync();
+#endif
 }
 
 bool file_impl::atEnd() const noexcept
