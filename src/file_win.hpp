@@ -58,7 +58,7 @@ private:
 };
 
 inline file_impl::file_impl(file_impl &&other) noexcept : _h{other._h} {
-	other._h = nullptr;
+	other._h = invalid_handle;
 }
 
 inline file_impl::~file_impl() noexcept

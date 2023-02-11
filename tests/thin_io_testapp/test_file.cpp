@@ -23,15 +23,21 @@ try {
 		file::deleteFile(testFilePath);
 
 		file f;
+		REQUIRE(!f);
+		REQUIRE(!f.is_open());
 		REQUIRE(f.open("", file::Read) == false);
 		REQUIRE(f.open(testFilePath, file::Read) == false);
 		REQUIRE(f.is_open() == false);
 		REQUIRE(f.close() == false);
 
 		REQUIRE(f.open("test.file", file::ReadWrite) == true);
+		REQUIRE(f);
+		REQUIRE(f.is_open());
 		constexpr const char testString[]{ "The quick brown fox jumps over the lazy dog"};
 		REQUIRE(f.write(testString, std::size(testString)) == std::size(testString));
 		REQUIRE(f.close());
+		REQUIRE(!f);
+		REQUIRE(!f.is_open());
 
 		REQUIRE(f.open("test.file", file::Read) == true);
 		std::string s;
@@ -423,4 +429,24 @@ TEST_CASE("Factory method", "[file]")
 	REQUIRE(::memcmp(buf, testString, sizeof(testString)) == 0);
 
 	REQUIRE(file::deleteFile(testFilePath));
+}
+
+TEST_CASE("Moving a file object", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::deleteFile(testFilePath);
+	REQUIRE(createTestFile(testFilePath, "0", 0));
+
+	auto f = file::create(testFilePath, file::Read);
+	REQUIRE(f);
+	auto f2 = std::move(f);
+	REQUIRE(f2);
+	REQUIRE(!f);
+
+	file f3;
+	REQUIRE(!f3);
+
+	f3 = std::move(f2);
+	REQUIRE(f3);
+	REQUIRE(!f2);
 }
