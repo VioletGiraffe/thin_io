@@ -50,7 +50,7 @@ public:
 	static bool deleteFile(const char* filePath) noexcept;
 
 	[[nodiscard]] static uint32_t error_code() noexcept;
-	[[nodiscard]] static std::string text_for_error(int ec) noexcept;
+	[[nodiscard]] static std::string text_for_error(uint32_t ec) noexcept;
 
 private:
 	static constexpr auto invalid_handle = (HANDLE)(~size_t{0});
