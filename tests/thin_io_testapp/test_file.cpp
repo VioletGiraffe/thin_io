@@ -449,4 +449,9 @@ TEST_CASE("Moving a file object", "[file]")
 	f3 = std::move(f2);
 	REQUIRE(f3);
 	REQUIRE(!f2);
+
+	REQUIRE(f3.close());
+	REQUIRE(!f3);
+
+	REQUIRE(file::deleteFile(testFilePath));
 }
