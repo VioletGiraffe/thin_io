@@ -1,5 +1,9 @@
-# Qmake Project Template
-This is a project template I use for creating C++ applications using the qmake build system (not necessarily using Qt itself in the app). Includes a bunch of my convenience C++ libraries.
+# Thin IO
+A lightweight cross-platform low-level C++ file library based directly on the native system API. Not using `<stdio>` or `<fstream>`.
+
+With this library you can create, write, read, and delete files. No extra bloat, no built-in support for serializing high-level types, just binary I/O.
+
+The interface is self-explanatory: https://github.com/VioletGiraffe/thin_io/blob/master/src/file_interface.hpp
 
 Clone this with
 `git clone --recurse-submodules --remote-submodules`
