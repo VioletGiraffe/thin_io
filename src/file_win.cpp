@@ -176,7 +176,7 @@ bool file_impl::fdatasync() noexcept
 	static constexpr NTSTATUS STATUS_SUCCESS = 0;
 
 	IO_STATUS_BLOCK iosb;
-	::memset(&iosb, 0, sizeof(&iosb));
+	::memset(&iosb, 0, sizeof(iosb));
 	if (NtFlushBuffersFileEx && NtFlushBuffersFileEx(_h, FLUSH_FLAGS_FILE_DATA_SYNC_ONLY, nullptr, 0, &iosb) == STATUS_SUCCESS)
 		return true;
 	else
