@@ -1,10 +1,35 @@
 #include "file_win.hpp"
 
+#include <string.h> // memcpy
 #include <Windows.h>
 
 using namespace thin_io;
 
 static_assert(sizeof(file_impl) == sizeof(HANDLE)); // Empty base optimiation test
+
+template <size_t N>
+static inline void to_wide_unc_path(const char* str, WCHAR(&wCharArray)[N])
+{
+	const size_t path_length = ::strlen(str);
+	size_t prefix_length = 0;
+	if (path_length >= 2 && str[1] == ':') // Absolute path?
+	{
+		static constexpr WCHAR prefix[] = LR"(\\?\)";
+		prefix_length = std::size(prefix) - 1 /* null */;
+		::memcpy(wCharArray, prefix, prefix_length * sizeof(WCHAR));
+	}
+
+	const auto nChars = ::MultiByteToWideChar(CP_UTF8, 0, str, (int)path_length, wCharArray + prefix_length, (int)(N - prefix_length - 1));
+	wCharArray[prefix_length + nChars] = 0;
+
+	// Fix non-Windows slashes.
+	// TODO: is memchr faster?
+	for (size_t i = prefix_length; i < prefix_length + nChars; ++i)
+	{
+		if (wCharArray[i] == L'/')
+			wCharArray[i] = L'\\';
+	}
+}
 
 #if !(defined(THIN_IO_WANT_FDATASYNC) && THIN_IO_WANT_FDATASYNC == 0)
 struct IO_STATUS_BLOCK {
@@ -69,14 +94,22 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 	if (is_open() && !close())
 		return false;
 
-	_h = ::CreateFileA(path,
-					   accessMask(openMode),
-					   shareMask(openMode, sharingMode),
+	WCHAR wPath[32768];
+	to_wide_unc_path(path, wPath);
+
+	const auto access = accessMask(openMode);
+	const auto sharing = shareMask(openMode, sharingMode);
+	const auto creationDisposition = creationMode(openMode);
+	const auto flagsAndAttrs = flags(cacheMode);
+
+	_h = ::CreateFileW(wPath,
+					   access,
+					   sharing,
 					   nullptr, // Security attrs
-					   creationMode(openMode),
-					   flags(cacheMode),
+					   creationDisposition,
+					   flagsAndAttrs,
 					   nullptr // Template handle
-					   );
+					);
 
 	return is_open();
 }
@@ -219,5 +252,8 @@ std::string file_impl::text_for_error(uint32_t ec) noexcept
 
 bool file_impl::delete_file(const char *filePath) noexcept
 {
-	return ::DeleteFileA(filePath) != 0;
+	WCHAR wPath[32768];
+	to_wide_unc_path(filePath, wPath);
+
+	return ::DeleteFileW(wPath) != 0;
 }

@@ -69,6 +69,7 @@ mac*|linux*{
 INCLUDEPATH += \
 	$${PWD}/../cpp-template-utils \
 	$${PWD}/../../cpp-template-utils \
+	$${PWD}/../../../cpp-template-utils \
 	$${PWD}/../../src
 
 SOURCES += \

@@ -27,6 +27,10 @@ mac*|linux*{
 	QMAKE_CXXFLAGS_WARN_ON += -Wno-missing-include-dirs -Wno-undef
 }
 
+HEADERS += \
+	src/file.hpp \
+	src/file_interface.hpp
+
 win*{
 	HEADERS += $$files(src/*_win.hpp, true)
 	SOURCES += $$files(src/*_win.cpp, true)

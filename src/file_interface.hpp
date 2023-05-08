@@ -12,7 +12,7 @@ struct file_definitions {
 };
 
 template <class Impl>
-class file_interface : public file_definitions {
+class file_interface final : public file_definitions {
 public:
 	inline bool open(const char* path,
 					 file_definitions::open_mode openMode,
@@ -40,7 +40,7 @@ public:
 		return is_open();
 	}
 
-	inline bool close() noexcept {
+	[[nodiscard]] inline bool close() noexcept {
 		return _impl.close();
 	}
 
@@ -72,8 +72,9 @@ public:
 		return _impl.set_pos(newPos);
 	}
 
+	// Can resize to a smaller or larger size
 	// This function also sets file position to the end
-	// 
+	//
 	// !!!
 	// Does not change file pointer on Windows!
 	// !!!
@@ -90,7 +91,7 @@ public:
 	}
 
 	// Negative value means an error querying the size
-	inline std::optional<uint64_t> size() const noexcept {
+	[[nodiscard]] inline std::optional<uint64_t> size() const noexcept {
 		return _impl.size();
 	}
 
@@ -112,8 +113,13 @@ public:
 		return Impl::text_for_error(ec);
 	}
 
+	// Beware, it's OS-specific!
+	[[nodiscard]] static inline std::string text_for_last_error() noexcept {
+		return Impl::text_for_error(error_code());
+	}
+
 private:
 	Impl _impl;
 };
 
-}
+} // namespace thin_io

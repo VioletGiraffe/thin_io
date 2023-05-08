@@ -54,6 +54,40 @@ catch (...) {
 }
 }
 
+TEST_CASE("create-write-close", "[file]")
+{
+try {
+	static constexpr const char testFilePath[] = "test.file";
+	{
+		file::delete_file(testFilePath);
+
+		file f;
+		REQUIRE(f.open("test.file", file::Write) == true);
+		REQUIRE(f);
+		REQUIRE(f.is_open());
+
+		constexpr const char testString[]{ "The quick brown fox jumps over the lazy dog"};
+		REQUIRE(f.write(testString, std::size(testString)) == std::size(testString));
+		REQUIRE(f.close());
+		REQUIRE(!f);
+		REQUIRE(!f.is_open());
+
+		REQUIRE(f.open("test.file", file::Read) == true);
+		REQUIRE(f.size() == std::size(testString));
+		std::string s;
+		s.resize(std::size(testString));
+		REQUIRE(f.read(s.data(), std::size(testString)) == std::size(testString));
+		REQUIRE(::memcmp(s.data(), testString, s.size()) == 0);
+	}
+
+	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
+	REQUIRE(file::delete_file(testFilePath));
+}
+catch (...) {
+	FAIL("file must not throw!");
+}
+}
+
 TEST_CASE("Navigating a file - read-only", "[file]")
 {
 try {
