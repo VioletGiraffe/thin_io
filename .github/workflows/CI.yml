@@ -29,8 +29,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        archives: 'qtbase'
-        version: 6.4.*
+        archives: 'qtbase icu'
+        version: 6.6.*
 
     - name: Windows - setup MSBuild
       if: startsWith(matrix.os, 'windows')
@@ -63,9 +63,7 @@ jobs:
         sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
         sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
         g++ --version
-        ldd $QT_ROOT_DIR/bin/qmake
         pushd tests
-        export LD_LIBRARY_PATH=$QT_ROOT_DIR/lib/:$LD_LIBRARY_PATH
         $QT_ROOT_DIR/bin/qmake -r
         make -j
 
