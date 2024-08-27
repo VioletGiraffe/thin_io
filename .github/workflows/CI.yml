@@ -40,10 +40,10 @@ jobs:
       if: startsWith(matrix.os, 'windows')
       shell: cmd
       run: |
-        %Qt5_DIR%\bin\qmake.exe -v
+        %QT_ROOT_DIR%\bin\qmake.exe -v
         call "%programfiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         pushd tests
-        %Qt5_DIR%\bin\qmake.exe -tp vc -r
+        %QT_ROOT_DIR%\bin\qmake.exe -tp vc -r
         msbuild /t:Build /p:Configuration=Release;PlatformToolset=v143
 
     - name: Mac
@@ -52,7 +52,7 @@ jobs:
       run: |
         clang --version
         pushd tests
-        $Qt5_DIR/bin/qmake -r
+        $QT_ROOT_DIR/bin/qmake -r
         make -j
 
     - name: Linux
@@ -64,7 +64,7 @@ jobs:
         sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
         g++ --version
         pushd tests
-        $Qt5_DIR/bin/qmake -r
+        $QT_ROOT_DIR/bin/qmake -r
         make -j
 
     - name: Test run
