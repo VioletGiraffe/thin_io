@@ -1,4 +1,4 @@
-CONFIG += strict_c++ c++2a
+CONFIG += strict_c++ c++2b
 
 CONFIG -= qt
 
@@ -67,9 +67,7 @@ mac*|linux*{
 }
 
 INCLUDEPATH += \
-	$${PWD}/../cpp-template-utils \
-	$${PWD}/../../cpp-template-utils \
-	$${PWD}/../../../cpp-template-utils \
+	$${PWD}/../../3rdparty \
 	$${PWD}/../../src
 
 SOURCES += \

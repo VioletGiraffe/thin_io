@@ -2,9 +2,9 @@ TEMPLATE = lib
 CONFIG += staticlib
 
 CONFIG -= qt
-CONFIG -= flat
+!win*:CONFIG -= flat
 
-CONFIG += strict_c++ c++2a
+CONFIG += strict_c++ c++2b
 
 mac* | linux* | freebsd {
 	CONFIG(release, debug|release):CONFIG *= Release optimize_full
