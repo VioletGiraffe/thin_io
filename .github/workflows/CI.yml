@@ -30,7 +30,7 @@ jobs:
       uses: jurplel/install-qt-action@v4
       with:
         archives: 'qtbase'
-        version: 6.7.*
+        version: 6.6.*
 
     - name: Windows - setup MSBuild
       if: startsWith(matrix.os, 'windows')
