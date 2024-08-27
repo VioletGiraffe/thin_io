@@ -1,4 +1,4 @@
-CONFIG += strict_c++ c++2b
+CONFIG += strict_c++ c++latest
 
 CONFIG -= qt
 

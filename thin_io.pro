@@ -4,7 +4,7 @@ CONFIG += staticlib
 CONFIG -= qt
 !win*:CONFIG -= flat
 
-CONFIG += strict_c++ c++2b
+CONFIG += strict_c++ c++latest
 
 mac* | linux* | freebsd {
 	CONFIG(release, debug|release):CONFIG *= Release optimize_full
