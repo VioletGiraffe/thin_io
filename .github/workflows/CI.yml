@@ -64,6 +64,7 @@ jobs:
         sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
         g++ --version
         pushd tests
+        PATH=$QT_ROOT_DIR/bin:$PATH
         $QT_ROOT_DIR/bin/qmake -r
         make -j
 
