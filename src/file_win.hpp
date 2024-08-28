@@ -9,7 +9,7 @@ namespace thin_io {
 
 using error_code = uint32_t;
 
-class file_impl final : public file_constants {
+class [[nodiscard]] file_impl final : public file_constants {
 public:
 	file_impl() noexcept = default;
 	inline file_impl(file_impl&& other) noexcept;

@@ -447,13 +447,13 @@ TEST_CASE("Factory method", "[file]")
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
 	file::delete_file(testFilePath);
 
-	auto f = file::create(testFilePath, file::open_mode::Write);
+	auto f = file::open_file(testFilePath, file::open_mode::Write);
 	REQUIRE(f);
 	REQUIRE(f.write(testString, sizeof(testString)) == sizeof(testString));
 	REQUIRE(f.close());
 	REQUIRE(!f);
 
-	f = file::create(testFilePath, file::open_mode::Read);
+	f = file::open_file(testFilePath, file::open_mode::Read);
 	REQUIRE(f);
 	char buf[sizeof(testString)] = { 0 };
 	REQUIRE(f.read(buf, sizeof(testString)) == sizeof(testString));
@@ -471,7 +471,7 @@ TEST_CASE("Moving a file object", "[file]")
 	file::delete_file(testFilePath);
 	REQUIRE(createTestFile(testFilePath, "0", 0));
 
-	auto f = file::create(testFilePath, file::open_mode::Read);
+	auto f = file::open_file(testFilePath, file::open_mode::Read);
 	REQUIRE(f);
 	auto f2 = std::move(f);
 	REQUIRE(f2);

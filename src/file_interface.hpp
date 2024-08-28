@@ -12,7 +12,7 @@ struct file_constants {
 };
 
 template <class Impl>
-class file_interface final : public file_constants {
+class [[nodiscard]] file_interface final : public file_constants {
 public:
 	inline bool open(const char* path,
 					 open_mode openMode,
@@ -23,7 +23,7 @@ public:
 		return _impl.open(path, openMode, cacheMode, sharingMode);
 	}
 
-	inline static file_interface create(const char* path,
+	inline static file_interface open_file(const char* path,
 		open_mode openMode,
 		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
 		sharing_mode sharingMode = sharing_mode::ShareRead
