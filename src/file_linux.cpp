@@ -38,7 +38,7 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 	}
 
 #ifdef __linux__
-	if (cacheMode == NoOsCaching) [[unlikely]]
+	if (cacheMode == sys_cache_mode::NoOsCaching) [[unlikely]]
 		flags |= O_DIRECT;
 #endif
 
@@ -54,7 +54,7 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 	_fd = ::open(path, flags, access);
 
 #ifdef __APPLE__
-	if (cacheMode == NoOsCaching && is_open()) [[unlikely]]
+	if (cacheMode == sys_cache_mode::NoOsCaching && is_open()) [[unlikely]]
 	{
 		fcntl(_fd, F_NOCACHE, 1);
 		fcntl(_fd, F_RDAHEAD, 0);
