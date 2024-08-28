@@ -28,6 +28,7 @@ mac*|linux*{
 }
 
 HEADERS += \
+	src/enum_helpers.hpp \
 	src/file.hpp \
 	src/file_interface.hpp
 

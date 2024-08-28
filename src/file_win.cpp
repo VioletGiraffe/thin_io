@@ -1,4 +1,8 @@
 #include "file_win.hpp"
+#include "enum_helpers.hpp"
+
+ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::open_mode);
+ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 
 #include <string.h> // memcpy
 #include <Windows.h>
@@ -50,41 +54,41 @@ static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileE
 }();
 #endif
 
-[[nodiscard]] inline constexpr DWORD accessMask(file_definitions::open_mode mode)
+[[nodiscard]] inline constexpr DWORD accessMask(file_constants::open_mode mode)
 {
 	DWORD access = 0;
-	if (mode & file_definitions::Read)
+	if (mode & file_constants::open_mode::Read)
 		access |= GENERIC_READ;
-	if (mode & file_definitions::Write)
+	if (mode & file_constants::open_mode::Write)
 		access |= GENERIC_WRITE;
 
 	return access;
 }
 
-[[nodiscard]] inline constexpr DWORD creationMode(file_definitions::open_mode mode)
+[[nodiscard]] inline constexpr DWORD creationMode(file_constants::open_mode mode)
 {
 	switch (mode)
 	{
-	case file_definitions::Read:
+	case file_constants::open_mode::Read:
 		return OPEN_EXISTING;
-	case file_definitions::Write:
+	case file_constants::open_mode::Write:
 		return CREATE_ALWAYS;
 	default:
 		return OPEN_ALWAYS;
 	}
 }
 
-[[nodiscard]] inline constexpr DWORD shareMask(file_definitions::open_mode openMode, file_definitions::sharing_mode sharing)
+[[nodiscard]] inline constexpr DWORD shareMask(file_constants::open_mode openMode, file_constants::sharing_mode sharing)
 {
-	if (openMode == file_definitions::Read)
-		return sharing | file_definitions::ShareWrite; // Add permission to read files open for writing with SHARE_READ only
+	if (openMode == file_constants::open_mode::Read)
+		return sharing | file_constants::sharing_mode::ShareWrite; // Add permission to read files open for writing with SHARE_READ only
 	else
-		return sharing; // Otherwise no change to permissions
+		return static_cast<DWORD>(sharing); // Otherwise no change to permissions
 }
 
-[[nodiscard]] inline constexpr DWORD flags(file_definitions::sys_cache_mode cacheMode)
+[[nodiscard]] inline constexpr DWORD flags(file_constants::sys_cache_mode cacheMode)
 {
-	return cacheMode == file_definitions::CachingEnabled ? FILE_ATTRIBUTE_NORMAL : FILE_FLAG_NO_BUFFERING;
+	return cacheMode == file_constants::sys_cache_mode::CachingEnabled ? FILE_ATTRIBUTE_NORMAL : FILE_FLAG_NO_BUFFERING;
 }
 
 bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept

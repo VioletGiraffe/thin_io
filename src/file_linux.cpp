@@ -26,10 +26,10 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 {
 	int flags = 0;
 	switch (openMode) {
-	case Read:
+	case open_mode::Read:
 		flags |= O_RDONLY;
 		break;
-	case Write:
+	case open_mode::Write:
 		flags |= (O_WRONLY | O_TRUNC | O_CREAT);
 		break;
 	default: // ReadWite

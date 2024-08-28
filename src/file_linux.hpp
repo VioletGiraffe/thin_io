@@ -4,7 +4,7 @@
 
 namespace thin_io {
 
-class file_impl : public file_definitions {
+class file_impl final : public file_constants {
 public:
 	file_impl() noexcept = default;
 	inline file_impl(file_impl&& other) noexcept;
@@ -14,7 +14,7 @@ public:
 
 	bool open(const char* path, open_mode openMode,
 			  sys_cache_mode cacheMode,
-			  file_definitions::sharing_mode sharingMode) noexcept;
+			  sharing_mode sharingMode) noexcept;
 
 	// Does not check if the handle was open, returns false if it wasn't
 	bool close() noexcept;

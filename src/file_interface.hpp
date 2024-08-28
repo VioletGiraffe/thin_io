@@ -5,28 +5,30 @@
 
 namespace thin_io {
 
-struct file_definitions {
-	enum open_mode {Read = 1, Write = 2, ReadWrite = 3};
-	enum sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
-	enum sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = 8};
+struct file_constants {
+	enum class open_mode {Read = 1, Write = 2, ReadWrite = 3};
+	enum class sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
+	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = 8};
 };
 
 template <class Impl>
-class file_interface final : public file_definitions {
+class file_interface final : public file_constants {
 public:
 	inline bool open(const char* path,
-					 file_definitions::open_mode openMode,
-					 file_definitions::sys_cache_mode cacheMode = file_definitions::CachingEnabled,
-					 file_definitions::sharing_mode sharingMode = file_definitions::ShareRead
-			) noexcept {
+					 open_mode openMode,
+					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+					 sharing_mode sharingMode = sharing_mode::ShareRead
+			) noexcept
+	{
 		return _impl.open(path, openMode, cacheMode, sharingMode);
 	}
 
 	inline static file_interface create(const char* path,
-		file_definitions::open_mode openMode,
-		file_definitions::sys_cache_mode cacheMode = file_definitions::CachingEnabled,
-		file_definitions::sharing_mode sharingMode = file_definitions::ShareRead
-	) noexcept {
+		open_mode openMode,
+		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+		sharing_mode sharingMode = sharing_mode::ShareRead
+	) noexcept
+	{
 		file_interface<Impl> f;
 		f.open(path, openMode, cacheMode, sharingMode);
 		return f;
