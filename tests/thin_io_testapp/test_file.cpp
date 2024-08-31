@@ -453,14 +453,24 @@ TEST_CASE("mmap - readonly", "[file]")
 	file f;
 	REQUIRE(f.open(testFilePath, file::open_mode::Read));
 
-	auto* addr = f.mmap(file::mmap_access_mode::ReadOnly, 0, size);
+	uint64_t offset = 0;
+	SECTION("0 offset") {
+		offset = 0;
+	}
+
+	SECTION("non-0 offset") {
+		offset = 5;
+	}
+
+	auto* addr = f.mmap(file::mmap_access_mode::ReadOnly, offset, size - offset);
 	REQUIRE(addr);
 
 	std::byte buf[size];
 	::memset(buf, 255, size);
 
-	::memcpy(buf, addr, size);
-	REQUIRE(::memcmp(buf, testString, size) == 0);
+	::memcpy(buf, addr, size - offset);
+	REQUIRE(::memcmp(buf, testString + offset, size - offset) == 0);
+
 	REQUIRE(f.unmap(addr));
 
 	REQUIRE(f.close());
@@ -481,11 +491,18 @@ TEST_CASE("mmap - write", "[file]")
 	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
 	REQUIRE(f.truncate(size));
 
-	auto* addr = f.mmap(file::mmap_access_mode::ReadWrite, 0, size);
-	auto s = f.text_for_last_error();
+	uint64_t offset = 0;
+	SECTION("0 offset") {
+		offset = 0;
+	}
+	SECTION("non-0 offset") {
+		offset = 12;
+	}
+
+	auto* addr = f.mmap(file::mmap_access_mode::ReadWrite, offset, size - offset);
 	REQUIRE(addr);
 
-	::memcpy(addr, testString, size);
+	::memcpy(addr, testString, size - offset);
 
 	REQUIRE(f.close());
 
@@ -494,8 +511,9 @@ TEST_CASE("mmap - write", "[file]")
 	::memset(buf, 255, size);
 
 	REQUIRE(f.size() == size);
-	REQUIRE(f.read(buf, size) == size);
-	REQUIRE(::memcmp(buf, testString, size) == 0);
+	REQUIRE(f.set_pos(offset));
+	REQUIRE(f.read(buf, size - offset) == size - offset);
+	REQUIRE(::memcmp(buf, testString, size - offset) == 0);
 	REQUIRE(f.close());
 
 	REQUIRE(file::delete_file(testFilePath));

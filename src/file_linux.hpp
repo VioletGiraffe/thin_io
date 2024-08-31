@@ -1,6 +1,7 @@
 #pragma once
 #include "file_interface.hpp"
 
+#include <vector>
 
 namespace thin_io {
 
@@ -38,6 +39,9 @@ public:
 	[[nodiscard]] bool fsync() noexcept;
 	[[nodiscard]] bool fdatasync() noexcept;
 
+	[[nodiscard]] void* mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept;
+	[[nodiscard]] bool unmap(void* mapAddress) noexcept;
+
 
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
 	[[nodiscard]] bool at_end() const noexcept;
@@ -48,6 +52,13 @@ public:
 	[[nodiscard]] static std::string text_for_error(int ec) noexcept;
 
 private:
+	struct Mapping {
+		void* addr = nullptr;
+		void* userAddr = nullptr;
+		uint64_t length = 0;
+	};
+
+	std::vector<Mapping> _memoryMappings;
 	int _fd = -1;
 };
 

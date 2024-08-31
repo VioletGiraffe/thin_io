@@ -4,9 +4,12 @@
 #include <string.h> // strerror
 
 #include <fcntl.h>
+ #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <algorithm>
 
 #ifdef __APPLE__
 #define O_LARGEFILE 0 // Not needed
@@ -66,6 +69,9 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 
 bool file_impl::close() noexcept
 {
+	for (const auto& mapping: _memoryMappings)
+		::munmap(mapping.addr, mapping.length);
+
 	if (is_open() && ::close(_fd) == 0)
 	{
 		_fd = -1;
@@ -140,6 +146,51 @@ bool file_impl::fdatasync() noexcept
 #else
 	return fsync();
 #endif
+}
+
+void* file_impl::mmap(mmap_access_mode mode, const uint64_t offset, const uint64_t length) noexcept
+{
+	// Offset must be a multiple of page size!
+	auto actualOffset = offset;
+	if (offset != 0) [[unlikely]]
+	{
+		// Query only once
+		static const uint64_t pageSize = (uint64_t)::sysconf(_SC_PAGE_SIZE);
+		if (offset % pageSize != 0)
+		{
+			const auto n = offset / pageSize;
+			actualOffset = n * pageSize; // Find the closest suitable lower offset
+		}
+	}
+
+	const auto offsetDiff = offset - actualOffset;
+	const int protectFlag = mode == mmap_access_mode::ReadOnly ? PROT_READ : (PROT_READ | PROT_WRITE);
+	void* addr = ::mmap(nullptr, length + offsetDiff, protectFlag, MAP_SHARED, _fd, static_cast<__off_t>(actualOffset));
+	if (addr == MAP_FAILED) [[unlikely]]
+		return nullptr;
+
+	auto* userAddress = reinterpret_cast<std::byte*>(addr) + offsetDiff;
+	_memoryMappings.push_back(Mapping{.addr = addr, .userAddr = userAddress, .length = length + offsetDiff});
+
+	return userAddress;
+}
+
+bool file_impl::unmap(void* mapAddress) noexcept
+{
+	auto it = std::find_if(_memoryMappings.begin(), _memoryMappings.end(), [mapAddress](const Mapping& m) {
+		return m.userAddr == mapAddress;
+	});
+
+	if (it == _memoryMappings.end()) [[unlikely]]
+		return false;
+
+	if (::munmap(it->addr, it->length) == 0) [[likely]]
+	{
+		_memoryMappings.erase(it);
+		return true;
+	}
+
+	return false;
 }
 
 bool file_impl::at_end() const noexcept
