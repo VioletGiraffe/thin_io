@@ -441,6 +441,66 @@ TEST_CASE("write-read sharing", "[file]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("mmap - readonly", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	file::delete_file(testFilePath);
+
+	static constexpr auto size = sizeof(testString);
+	REQUIRE(createTestFile(testFilePath, testString, size));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::open_mode::Read));
+
+	auto* addr = f.mmap(file::mmap_access_mode::ReadOnly, 0, size);
+	REQUIRE(addr);
+
+	std::byte buf[size];
+	::memset(buf, 255, size);
+
+	::memcpy(buf, addr, size);
+	REQUIRE(::memcmp(buf, testString, size) == 0);
+	REQUIRE(f.unmap(addr));
+
+	REQUIRE(f.close());
+
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("mmap - write", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	file::delete_file(testFilePath);
+
+	static constexpr auto size = sizeof(testString);
+	REQUIRE(createTestFile(testFilePath, testString, 0));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
+	REQUIRE(f.truncate(size));
+
+	auto* addr = f.mmap(file::mmap_access_mode::ReadWrite, 0, size);
+	auto s = f.text_for_last_error();
+	REQUIRE(addr);
+
+	::memcpy(addr, testString, size);
+
+	REQUIRE(f.close());
+
+	f.open(testFilePath, file::open_mode::Read);
+	char buf[size];
+	::memset(buf, 255, size);
+
+	REQUIRE(f.size() == size);
+	REQUIRE(f.read(buf, size) == size);
+	REQUIRE(::memcmp(buf, testString, size) == 0);
+	REQUIRE(f.close());
+
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("Factory method", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";

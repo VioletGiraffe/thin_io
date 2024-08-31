@@ -9,6 +9,7 @@ struct file_constants {
 	enum class open_mode {Read = 1, Write = 2, ReadWrite = 3};
 	enum class sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
 	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = 8};
+	enum class mmap_access_mode {ReadOnly = 0, ReadWrite = 1};
 };
 
 template <class Impl>
@@ -90,6 +91,14 @@ public:
 
 	[[nodiscard]] inline bool fdatasync() noexcept {
 		return _impl.fdatasync();
+	}
+
+	[[nodiscard]] inline void* mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept {
+		return _impl.mmap(mode, offset, length);
+	}
+
+	[[nodiscard]] bool unmap(void* mapAddress) noexcept {
+		return _impl.unmap(mapAddress);
 	}
 
 	// Negative value means an error querying the size

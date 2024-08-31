@@ -4,12 +4,13 @@
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::open_mode);
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 
+#include <assert.h>
 #include <string.h> // memcpy
 #include <Windows.h>
 
 using namespace thin_io;
 
-static_assert(sizeof(file_impl) == sizeof(HANDLE)); // Empty base optimiation test
+static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); // Empty base optimiation test
 
 template <size_t N>
 static inline void to_wide_unc_path(const char* str, WCHAR(&wCharArray)[N])
@@ -120,6 +121,8 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 
 bool file_impl::close() noexcept
 {
+	_memoryMappings.clear(); // Unmap memory before closing the file
+
 	if (is_open() && ::CloseHandle(_h) != 0)
 	{
 		_h = invalid_handle;
@@ -196,7 +199,6 @@ bool file_impl::set_pos(uint64_t newPos) noexcept
 // This function also sets file position to the end
 bool file_impl::truncate(uint64_t newFileSize) noexcept
 {
-	// TODO: a better way is SetFileInformationByHandle with FileEndOfFileInfo
 	FILE_END_OF_FILE_INFO eof;
 	eof.EndOfFile.QuadPart = static_cast<LONGLONG>(newFileSize);
 	return ::SetFileInformationByHandle(_h, FileEndOfFileInfo, &eof, sizeof(eof)) != 0;
@@ -221,6 +223,38 @@ bool file_impl::fdatasync() noexcept
 #else
 	return fsync();
 #endif
+}
+
+void* file_impl::mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept
+{
+	const DWORD protectFlag = mode == mmap_access_mode::ReadOnly ? PAGE_READONLY : PAGE_READWRITE;
+	HANDLE fileMappingHandle = ::CreateFileMappingA(_h, nullptr, protectFlag, static_cast<DWORD>(length >> 32), static_cast<DWORD>(length & 0xFFFFFFFFu), nullptr);
+	if (fileMappingHandle == nullptr) [[unlikely]]
+		return nullptr;
+
+	const DWORD fileAccessFlag = mode == mmap_access_mode::ReadOnly ? FILE_MAP_READ : FILE_MAP_WRITE;
+	void* addr = ::MapViewOfFile(fileMappingHandle, fileAccessFlag, static_cast<DWORD>(offset >> 32), static_cast<DWORD>(offset & 0xFFFFFFFFu), length);
+	if (addr == nullptr) [[unlikely]]
+	{
+		::CloseHandle(fileMappingHandle);
+		return nullptr;
+	}
+
+	_memoryMappings.push_back(Mapping{addr, fileMappingHandle});
+	return addr;
+}
+
+bool file_impl::unmap(void* mapAddress) noexcept
+{
+	auto it = std::find_if(_memoryMappings.begin(), _memoryMappings.end(), [mapAddress](const Mapping& m) {
+		return m.addr == mapAddress;
+	});
+
+	if (it == _memoryMappings.end()) [[unlikely]]
+		return false;
+
+	_memoryMappings.erase(it);
+	return true;
 }
 
 bool file_impl::at_end() const noexcept
@@ -260,4 +294,16 @@ bool file_impl::delete_file(const char *filePath) noexcept
 	to_wide_unc_path(filePath, wPath);
 
 	return ::DeleteFileW(wPath) != 0;
+}
+
+file_impl::Mapping::~Mapping() noexcept
+{
+	if (handle)
+	{
+		[[maybe_unused]] BOOL success = ::UnmapViewOfFile(addr);
+		assert(success);
+
+		success = ::CloseHandle(handle);
+		assert(success);
+	}
 }

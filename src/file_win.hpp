@@ -2,6 +2,7 @@
 #include "file_interface.hpp"
 
 #include <stddef.h>
+#include <vector>
 
 using HANDLE = void*;
 
@@ -43,6 +44,9 @@ public:
 	[[nodiscard]] bool fsync() noexcept;
 	[[nodiscard]] bool fdatasync() noexcept;
 
+	[[nodiscard]] void* mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept;
+	[[nodiscard]] bool unmap(void* mapAddress) noexcept;
+
 
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
 	[[nodiscard]] bool at_end() const noexcept;
@@ -53,7 +57,38 @@ public:
 	[[nodiscard]] static std::string text_for_error(uint32_t ec) noexcept;
 
 private:
+	struct Mapping {
+		inline constexpr Mapping(void* a, HANDLE h) :
+			addr{ a }, handle{ h }
+		{}
+
+		inline constexpr Mapping(Mapping&& other) noexcept :
+			addr { other.addr },
+			handle{ other.handle }
+		{
+			other.handle = nullptr;
+			other.addr = nullptr;
+		}
+
+		inline constexpr Mapping& operator=(Mapping&& other) noexcept {
+			addr = other.addr;
+			handle = other.handle;
+
+			other.handle = nullptr;
+			other.addr = nullptr;
+
+			return *this;
+		}
+
+		~Mapping() noexcept;
+
+		void* addr = nullptr;
+		HANDLE handle = nullptr;
+	};
+
 	static constexpr auto invalid_handle = (HANDLE)(~size_t{0});
+	std::vector<Mapping> _memoryMappings;
+
 	HANDLE _h = invalid_handle;
 };
 
