@@ -58,34 +58,14 @@ public:
 
 private:
 	struct Mapping {
-		inline constexpr Mapping(void* a, HANDLE h) :
-			addr{ a }, handle{ h }
-		{}
-
-		inline constexpr Mapping(Mapping&& other) noexcept :
-			addr { other.addr },
-			handle{ other.handle }
-		{
-			other.handle = nullptr;
-			other.addr = nullptr;
-		}
-
-		inline constexpr Mapping& operator=(Mapping&& other) noexcept {
-			addr = other.addr;
-			handle = other.handle;
-
-			other.handle = nullptr;
-			other.addr = nullptr;
-
-			return *this;
-		}
-
-		~Mapping() noexcept;
-
+		void* userAddr = nullptr;
 		void* addr = nullptr;
 		HANDLE handle = nullptr;
 	};
 
+	bool do_unmap(const Mapping& mapping) noexcept;
+
+private:
 	static constexpr auto invalid_handle = (HANDLE)(~size_t{0});
 	std::vector<Mapping> _memoryMappings;
 

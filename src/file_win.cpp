@@ -121,7 +121,9 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 
 bool file_impl::close() noexcept
 {
-	_memoryMappings.clear(); // Unmap memory before closing the file
+	// Unmap memory before closing the file
+	for (const auto& mapping : _memoryMappings)
+		do_unmap(mapping);
 
 	if (is_open() && ::CloseHandle(_h) != 0)
 	{
@@ -227,34 +229,74 @@ bool file_impl::fdatasync() noexcept
 
 void* file_impl::mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept
 {
+	uint64_t actualOffset = offset;
+	if (offset != 0)
+	{
+		// Query only once
+		static const uint64_t pageSize = [] {
+			SYSTEM_INFO info;
+			::GetSystemInfo(&info);
+
+			return info.dwPageSize;
+		}();
+
+		const auto nPages = offset / pageSize;
+		actualOffset = nPages * pageSize; // Find the closest suitable lower offset
+	}
+
+	const uint64_t offsetDifference = offset - actualOffset;
+	const uint64_t actualLength = length + offsetDifference;
+
 	const DWORD protectFlag = mode == mmap_access_mode::ReadOnly ? PAGE_READONLY : PAGE_READWRITE;
-	HANDLE fileMappingHandle = ::CreateFileMappingA(_h, nullptr, protectFlag, static_cast<DWORD>(length >> 32), static_cast<DWORD>(length & 0xFFFFFFFFu), nullptr);
+	HANDLE fileMappingHandle = ::CreateFileMappingA(
+		_h,
+		nullptr,
+		protectFlag,
+		static_cast<DWORD>(actualLength >> 32),
+		static_cast<DWORD>(actualLength & 0xFFFFFFFFu),
+		nullptr
+	);
+
 	if (fileMappingHandle == nullptr) [[unlikely]]
 		return nullptr;
 
 	const DWORD fileAccessFlag = mode == mmap_access_mode::ReadOnly ? FILE_MAP_READ : FILE_MAP_WRITE;
-	void* addr = ::MapViewOfFile(fileMappingHandle, fileAccessFlag, static_cast<DWORD>(offset >> 32), static_cast<DWORD>(offset & 0xFFFFFFFFu), length);
+
+	void* addr = ::MapViewOfFile(
+		fileMappingHandle,
+		fileAccessFlag,
+		static_cast<DWORD>(actualOffset >> 32),
+		static_cast<DWORD>(actualOffset & 0xFF'FF'FF'FFull),
+		actualLength
+	);
+
 	if (addr == nullptr) [[unlikely]]
 	{
 		::CloseHandle(fileMappingHandle);
 		return nullptr;
 	}
 
-	_memoryMappings.push_back(Mapping{addr, fileMappingHandle});
-	return addr;
+	auto* userAddress = reinterpret_cast<std::byte*>(addr) + offsetDifference;
+	_memoryMappings.push_back(Mapping{.userAddr = userAddress, .addr = addr, .handle = fileMappingHandle});
+	return userAddress;
 }
 
 bool file_impl::unmap(void* mapAddress) noexcept
 {
 	auto it = std::find_if(_memoryMappings.begin(), _memoryMappings.end(), [mapAddress](const Mapping& m) {
-		return m.addr == mapAddress;
+		return m.userAddr == mapAddress;
 	});
 
 	if (it == _memoryMappings.end()) [[unlikely]]
 		return false;
 
-	_memoryMappings.erase(it);
-	return true;
+	if (do_unmap(*it)) [[likely]]
+	{
+		_memoryMappings.erase(it);
+		return true;
+	}
+
+	return false;
 }
 
 bool file_impl::at_end() const noexcept
@@ -296,14 +338,8 @@ bool file_impl::delete_file(const char *filePath) noexcept
 	return ::DeleteFileW(wPath) != 0;
 }
 
-file_impl::Mapping::~Mapping() noexcept
+bool file_impl::do_unmap(const Mapping& mapping) noexcept
 {
-	if (handle)
-	{
-		[[maybe_unused]] BOOL success = ::UnmapViewOfFile(addr);
-		assert(success);
-
-		success = ::CloseHandle(handle);
-		assert(success);
-	}
+	const BOOL success = ::UnmapViewOfFile(mapping.addr) && ::CloseHandle(mapping.handle);
+	return success != 0;
 }

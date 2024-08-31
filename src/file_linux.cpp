@@ -156,11 +156,8 @@ void* file_impl::mmap(mmap_access_mode mode, const uint64_t offset, const uint64
 	{
 		// Query only once
 		static const uint64_t pageSize = (uint64_t)::sysconf(_SC_PAGE_SIZE);
-		if (offset % pageSize != 0)
-		{
-			const auto n = offset / pageSize;
-			actualOffset = n * pageSize; // Find the closest suitable lower offset
-		}
+		const auto nPages = offset / pageSize;
+		actualOffset = nPages * pageSize; // Find the closest suitable lower offset
 	}
 
 	const auto offsetDiff = offset - actualOffset;
