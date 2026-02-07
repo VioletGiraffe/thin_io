@@ -23,7 +23,7 @@ Debug:OUTPUT_DIR=debug
 DESTDIR  = ../bin/$${OUTPUT_DIR}/
 OBJECTS_DIR = ../build/$${OUTPUT_DIR}
 
-*g++*:QMAKE_CXXFLAGS += -fconcepts -std=c++2a
+!mac*:*g++*:QMAKE_CXXFLAGS += -fconcepts -std=c++2a
 *msvc*{
 	Debug:QMAKE_CXXFLAGS += /JMC
 }
