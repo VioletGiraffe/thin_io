@@ -22,7 +22,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: 'recursive'
 
@@ -30,21 +30,20 @@ jobs:
       uses: jurplel/install-qt-action@v4
       with:
         archives: 'qtbase icu'
-        version: 6.6.*
+        version: 6.9.*
 
-    - name: Windows - setup MSBuild
+    - name: Setup MSVC Developer Command Prompt
       if: startsWith(matrix.os, 'windows')
-      uses: microsoft/setup-msbuild@v1.1
+      uses: ilammy/msvc-dev-cmd@v1
 
     - name: Windows
       if: startsWith(matrix.os, 'windows')
       shell: cmd
       run: |
         %QT_ROOT_DIR%\bin\qmake.exe -v
-        call "%programfiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         pushd tests
         %QT_ROOT_DIR%\bin\qmake.exe -tp vc -r
-        msbuild /t:Build /p:Configuration=Release;PlatformToolset=v143
+        msbuild /t:Build /p:Configuration=Release
 
     - name: Mac
       if: startsWith(matrix.os, 'macos')
@@ -59,9 +58,6 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu')
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: |
-        sudo apt update -y; sudo apt install -qq gcc-12 g++-12
-        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
         g++ --version
         pushd tests
         $QT_ROOT_DIR/bin/qmake -r
