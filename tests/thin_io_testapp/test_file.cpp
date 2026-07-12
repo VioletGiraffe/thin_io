@@ -13,6 +13,14 @@ using namespace thin_io;
 #else
 #define REQUIRE_WIN(...) (void)0
 #define REQUIRE_LINUX(...) REQUIRE(__VA_ARGS__)
+
+#include <sys/stat.h>
+// Actual on-disk allocation in bytes: ~0 for a sparse file, >= the logical size when the space is really reserved
+static uint64_t allocatedSizeOnDisk(const char* path)
+{
+	struct stat st;
+	return ::stat(path, &st) == 0 ? static_cast<uint64_t>(st.st_blocks) * 512u : 0;
+}
 #endif
 
 TEST_CASE("basic file functionality", "[file]")
@@ -300,6 +308,46 @@ try {
 catch (...) {
 	FAIL("file must not throw!");
 }
+}
+
+TEST_CASE("truncate reserves space on growth", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::delete_file(testFilePath);
+
+	static constexpr uint64_t largeSize = 4u * 1024u * 1024u; // Large enough that block-size rounding is negligible
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
+	REQUIRE(f.size() == 0);
+
+	// Growing must set the logical size and physically reserve the blocks rather than create a sparse file
+	REQUIRE(f.truncate(largeSize));
+	REQUIRE(f.size() == largeSize);
+	REQUIRE_LINUX(allocatedSizeOnDisk(testFilePath) >= largeSize); // Linux + macOS: real allocation, not a sparse file
+
+	// The reserved range must read back as zeros
+	char buf[4096];
+	::memset(buf, 0xFF, sizeof(buf));
+	REQUIRE(f.set_pos(0));
+	REQUIRE(f.read(buf, sizeof(buf)) == sizeof(buf));
+	bool allZero = true;
+	for (const char c : buf)
+	{
+		if (c != 0)
+		{
+			allZero = false;
+			break;
+		}
+	}
+	REQUIRE(allZero);
+
+	// Shrinking must still reduce the logical size
+	REQUIRE(f.truncate(1024));
+	REQUIRE(f.size() == 1024);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
 }
 
 TEST_CASE("Empty files", "[file]")

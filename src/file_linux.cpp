@@ -124,10 +124,45 @@ bool file_impl::set_pos(uint64_t newPos) noexcept
 	return pos == static_cast<off64_t>(newPos);
 }
 
-// This function also sets file position to the end
 bool file_impl::truncate(uint64_t newFileSize) noexcept
 {
-	return ::ftruncate64(_fd, static_cast<off64_t>(newFileSize)) == 0;
+	const auto currentSize = size();
+	if (!currentSize) [[unlikely]]
+		return false;
+
+	// Shrinking (or no change) only needs to set the logical size
+	if (newFileSize <= *currentSize)
+		return ::ftruncate64(_fd, static_cast<off64_t>(newFileSize)) == 0;
+
+	// Growing: physically reserve the new space so a subsequent write can't run out of disk space, and to reduce fragmentation
+#ifdef __APPLE__
+	// macOS has neither fallocate nor posix_fallocate; F_PREALLOCATE reserves the blocks, then ftruncate sets the logical size
+	fstore_t fst;
+	fst.fst_flags = F_ALLOCATECONTIG; // Prefer a single contiguous extent
+	fst.fst_posmode = F_PEOFPOSMODE; // Allocate the requested length past the current physical end of file
+	fst.fst_offset = 0;
+	fst.fst_length = static_cast<off_t>(newFileSize - *currentSize);
+	fst.fst_bytesalloc = 0;
+	if (::fcntl(_fd, F_PREALLOCATE, &fst) == -1) [[unlikely]]
+	{
+		fst.fst_flags = F_ALLOCATEALL; // Fall back to a possibly fragmented allocation
+		if (::fcntl(_fd, F_PREALLOCATE, &fst) == -1) [[unlikely]]
+			return false;
+	}
+
+	return ::ftruncate(_fd, static_cast<off_t>(newFileSize)) == 0;
+#else
+	// posix_fallocate reports the error via its return value rather than errno, and on filesystems without native
+	// preallocation falls back to writing zeros - which still guarantees the space, at the cost of the extra I/O
+	const int err = ::posix_fallocate64(_fd, static_cast<off64_t>(*currentSize), static_cast<off64_t>(newFileSize - *currentSize));
+	if (err != 0) [[unlikely]]
+	{
+		errno = err;
+		return false;
+	}
+
+	return true;
+#endif
 }
 
 bool file_impl::fsync() noexcept
