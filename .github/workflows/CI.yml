@@ -30,7 +30,7 @@ jobs:
       uses: jurplel/install-qt-action@v4
       with:
         archives: 'qtbase icu'
-        version: 6.9.*
+        version: 6.6.*
 
     - name: Setup MSVC Developer Command Prompt
       if: startsWith(matrix.os, 'windows')
