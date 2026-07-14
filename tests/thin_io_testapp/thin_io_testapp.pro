@@ -72,4 +72,5 @@ INCLUDEPATH += \
 
 SOURCES += \
 	test_file.cpp \
+	test_file_links.cpp \
 	tests_main.cpp

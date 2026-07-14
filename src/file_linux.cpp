@@ -26,18 +26,43 @@ using off64_t = off_t;
 using namespace thin_io;
 
 
-bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheMode, sharing_mode /*sharingMode*/) noexcept
+bool file_impl::open(const char* path, const access_mode accessMode, const open_disposition disposition,
+					 sys_cache_mode cacheMode, sharing_mode /*sharingMode*/) noexcept
 {
-	int flags = 0;
-	switch (openMode) {
-	case open_mode::Read:
+	if (is_open() && !close())
+		return false;
+
+	if (accessMode == access_mode::Read && disposition == open_disposition::CreateOrTruncate) [[unlikely]]
+	{
+		errno = EINVAL;
+		return false;
+	}
+
+	int flags = O_LARGEFILE;
+	switch (accessMode) {
+	case access_mode::Read:
 		flags |= O_RDONLY;
 		break;
-	case open_mode::Write:
-		flags |= (O_WRONLY | O_TRUNC | O_CREAT);
+	case access_mode::Write:
+		flags |= O_WRONLY;
 		break;
-	default: // ReadWite
-		flags |= (O_RDWR | O_CREAT);
+	case access_mode::ReadWrite:
+		flags |= O_RDWR;
+		break;
+	}
+
+	switch (disposition)
+	{
+	case open_disposition::OpenExisting:
+		break;
+	case open_disposition::OpenOrCreate:
+		flags |= O_CREAT;
+		break;
+	case open_disposition::CreateNew:
+		flags |= O_CREAT | O_EXCL;
+		break;
+	case open_disposition::CreateOrTruncate:
+		flags |= O_CREAT | O_TRUNC;
 		break;
 	}
 
@@ -46,16 +71,16 @@ bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheM
 		flags |= O_DIRECT;
 #endif
 
-	// The mneaning if sharingMode mode flag is not the same as the Linux access mode. Ignoring sharing flags.
-	int access = O_LARGEFILE;
-	if ((flags & O_CREAT) != 0) // The access parameter is ignored unless O_CREAT is specified
+	// The meaning of sharingMode is not the same as the POSIX access mode. Ignore sharing flags.
+	int permissions = 0;
+	if ((flags & O_CREAT) != 0) // The permissions argument is ignored unless O_CREAT is specified
 	{
-		access |= (S_IRUSR | S_IRGRP | S_IROTH);
-		access |= (S_IWUSR | S_IWGRP | S_IWOTH);
-		access |= (S_IXUSR | S_IXGRP | S_IXOTH);
+		permissions |= (S_IRUSR | S_IRGRP | S_IROTH);
+		permissions |= (S_IWUSR | S_IWGRP | S_IWOTH);
+		permissions |= (S_IXUSR | S_IXGRP | S_IXOTH);
 	}
 
-	_fd = ::open(path, flags, access);
+	_fd = ::open(path, flags, permissions);
 
 #ifdef __APPLE__
 	if (cacheMode == sys_cache_mode::NoOsCaching && is_open()) [[unlikely]]

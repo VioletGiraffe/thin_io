@@ -18,7 +18,8 @@ public:
 
 	inline file_impl& operator=(file_impl&& other) noexcept;
 
-	bool open(const char* path, open_mode openMode,
+	bool open(const char* path, access_mode accessMode,
+			  open_disposition disposition,
 			  sys_cache_mode cacheMode,
 			  sharing_mode sharingMode) noexcept;
 

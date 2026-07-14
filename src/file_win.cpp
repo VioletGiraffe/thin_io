@@ -1,7 +1,7 @@
 #include "file_win.hpp"
 #include "enum_helpers.hpp"
 
-ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::open_mode);
+ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::access_mode);
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 
 #include <assert.h>
@@ -50,33 +50,37 @@ static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileE
 }();
 #endif
 
-[[nodiscard]] inline constexpr DWORD accessMask(file_constants::open_mode mode)
+[[nodiscard]] inline constexpr DWORD accessMask(file_constants::access_mode mode)
 {
 	DWORD access = 0;
-	if (mode & file_constants::open_mode::Read)
+	if (mode & file_constants::access_mode::Read)
 		access |= GENERIC_READ;
-	if (mode & file_constants::open_mode::Write)
+	if (mode & file_constants::access_mode::Write)
 		access |= GENERIC_WRITE;
 
 	return access;
 }
 
-[[nodiscard]] inline constexpr DWORD creationMode(file_constants::open_mode mode)
+[[nodiscard]] inline constexpr DWORD creationDisposition(file_constants::open_disposition disposition)
 {
-	switch (mode)
+	switch (disposition)
 	{
-	case file_constants::open_mode::Read:
+	case file_constants::open_disposition::OpenExisting:
 		return OPEN_EXISTING;
-	case file_constants::open_mode::Write:
-		return CREATE_ALWAYS;
-	default:
+	case file_constants::open_disposition::OpenOrCreate:
 		return OPEN_ALWAYS;
+	case file_constants::open_disposition::CreateNew:
+		return CREATE_NEW;
+	case file_constants::open_disposition::CreateOrTruncate:
+		return CREATE_ALWAYS;
 	}
+
+	return OPEN_EXISTING;
 }
 
-[[nodiscard]] inline constexpr DWORD shareMask(file_constants::open_mode openMode, file_constants::sharing_mode sharing)
+[[nodiscard]] inline constexpr DWORD shareMask(file_constants::access_mode accessMode, file_constants::sharing_mode sharing)
 {
-	if (openMode == file_constants::open_mode::Read)
+	if (accessMode == file_constants::access_mode::Read)
 		return sharing | file_constants::sharing_mode::ShareWrite; // Add permission to read files open for writing with SHARE_READ only
 	else
 		return static_cast<DWORD>(sharing); // Otherwise no change to permissions
@@ -87,26 +91,33 @@ static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileE
 	return cacheMode == file_constants::sys_cache_mode::CachingEnabled ? FILE_ATTRIBUTE_NORMAL : FILE_FLAG_NO_BUFFERING;
 }
 
-bool file_impl::open(const char *path, open_mode openMode, sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept
+bool file_impl::open(const char* path, const access_mode accessMode, const open_disposition disposition,
+					 sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept
 {
 	static_assert(INVALID_HANDLE_VALUE == invalid_handle);
 
 	if (is_open() && !close())
 		return false;
 
+	if (accessMode == access_mode::Read && disposition == open_disposition::CreateOrTruncate) [[unlikely]]
+	{
+		::SetLastError(ERROR_INVALID_PARAMETER);
+		return false;
+	}
+
 	WCHAR wPath[32768];
 	to_wide_unc_path(path, wPath);
 
-	const auto access = accessMask(openMode);
-	const auto sharing = shareMask(openMode, sharingMode);
-	const auto creationDisposition = creationMode(openMode);
+	const auto access = accessMask(accessMode);
+	const auto sharing = shareMask(accessMode, sharingMode);
+	const auto dispositionValue = creationDisposition(disposition);
 	const auto flagsAndAttrs = flags(cacheMode);
 
 	_h = ::CreateFileW(wPath,
 					   access,
 					   sharing,
 					   nullptr, // Security attrs
-					   creationDisposition,
+					   dispositionValue,
 					   flagsAndAttrs,
 					   nullptr // Template handle
 					);

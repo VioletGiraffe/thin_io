@@ -6,7 +6,10 @@
 namespace thin_io {
 
 struct file_constants {
-	enum class open_mode {Read = 1, Write = 2, ReadWrite = 3};
+	enum class access_mode {Read = 1, Write = 2, ReadWrite = 3};
+	// Existence handling is independent of access. CreateNew is an atomic exclusive create; CreateOrTruncate requires
+	// write access. Existing contents are preserved by OpenExisting, OpenOrCreate, and a failed CreateNew.
+	enum class open_disposition {OpenExisting, OpenOrCreate, CreateNew, CreateOrTruncate};
 	enum class sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
 	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = 8};
 	enum class mmap_access_mode {ReadOnly = 0, ReadWrite = 1};
@@ -15,23 +18,46 @@ struct file_constants {
 template <class Impl>
 class [[nodiscard]] file_interface final : public file_constants {
 public:
+	// Read opens an existing file, Write creates or truncates, and ReadWrite opens or creates.
 	inline bool open(const char* path,
-					 open_mode openMode,
+					 access_mode accessMode,
 					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
 					 sharing_mode sharingMode = sharing_mode::ShareRead
 			) noexcept
 	{
-		return _impl.open(path, openMode, cacheMode, sharingMode);
+		return open(path, accessMode, defaultOpenDisposition(accessMode), cacheMode, sharingMode);
+	}
+
+	inline bool open(const char* path,
+					 access_mode accessMode,
+					 open_disposition disposition,
+					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+					 sharing_mode sharingMode = sharing_mode::ShareRead
+			) noexcept
+	{
+		return _impl.open(path, accessMode, disposition, cacheMode, sharingMode);
 	}
 
 	inline static file_interface open_file(const char* path,
-		open_mode openMode,
+		access_mode accessMode,
 		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
 		sharing_mode sharingMode = sharing_mode::ShareRead
 	) noexcept
 	{
 		file_interface<Impl> f;
-		f.open(path, openMode, cacheMode, sharingMode);
+		f.open(path, accessMode, cacheMode, sharingMode);
+		return f;
+	}
+
+	inline static file_interface open_file(const char* path,
+		access_mode accessMode,
+		open_disposition disposition,
+		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+		sharing_mode sharingMode = sharing_mode::ShareRead
+	) noexcept
+	{
+		file_interface<Impl> f;
+		f.open(path, accessMode, disposition, cacheMode, sharingMode);
 		return f;
 	}
 
@@ -140,6 +166,21 @@ public:
 	}
 
 private:
+	[[nodiscard]] static constexpr open_disposition defaultOpenDisposition(const access_mode accessMode) noexcept
+	{
+		switch (accessMode)
+		{
+		case access_mode::Read:
+			return open_disposition::OpenExisting;
+		case access_mode::Write:
+			return open_disposition::CreateOrTruncate;
+		case access_mode::ReadWrite:
+			return open_disposition::OpenOrCreate;
+		}
+
+		return open_disposition::OpenExisting;
+	}
+
 	Impl _impl;
 };
 

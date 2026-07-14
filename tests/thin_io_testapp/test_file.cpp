@@ -35,12 +35,12 @@ try {
 		file f;
 		REQUIRE(!f);
 		REQUIRE(!f.is_open());
-		REQUIRE(f.open("", file::open_mode::Read) == false);
-		REQUIRE(f.open(testFilePath, file::open_mode::Read) == false);
+		REQUIRE(f.open("", file::access_mode::Read) == false);
+		REQUIRE(f.open(testFilePath, file::access_mode::Read) == false);
 		REQUIRE(f.is_open() == false);
 		REQUIRE(f.close() == false);
 
-		REQUIRE(f.open("test.file", file::open_mode::ReadWrite) == true);
+		REQUIRE(f.open("test.file", file::access_mode::ReadWrite) == true);
 		REQUIRE(f);
 		REQUIRE(f.is_open());
 		constexpr const char testString[]{ "The quick brown fox jumps over the lazy dog"};
@@ -49,7 +49,7 @@ try {
 		REQUIRE(!f);
 		REQUIRE(!f.is_open());
 
-		REQUIRE(f.open("test.file", file::open_mode::Read) == true);
+		REQUIRE(f.open("test.file", file::access_mode::Read) == true);
 		std::string s;
 		s.resize(std::size(testString));
 		REQUIRE(f.read(s.data(), std::size(testString)) == std::size(testString));
@@ -72,7 +72,7 @@ try {
 		file::delete_file(testFilePath);
 
 		file f;
-		REQUIRE(f.open("test.file", file::open_mode::Write) == true);
+		REQUIRE(f.open("test.file", file::access_mode::Write) == true);
 		REQUIRE(f);
 		REQUIRE(f.is_open());
 
@@ -82,7 +82,7 @@ try {
 		REQUIRE(!f);
 		REQUIRE(!f.is_open());
 
-		REQUIRE(f.open("test.file", file::open_mode::Read) == true);
+		REQUIRE(f.open("test.file", file::access_mode::Read) == true);
 		REQUIRE(f.size() == std::size(testString));
 		std::string s;
 		s.resize(std::size(testString));
@@ -98,6 +98,46 @@ catch (...) {
 }
 }
 
+TEST_CASE("open dispositions", "[file]")
+{
+	static constexpr char testFilePath[] = "test.file";
+	static constexpr char originalContents[] = "existing contents";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(!f.open(testFilePath, file::access_mode::Read, file::open_disposition::OpenExisting));
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::OpenOrCreate));
+	REQUIRE(f.write(originalContents, sizeof(originalContents)) == sizeof(originalContents));
+	REQUIRE(f.close());
+
+	REQUIRE(f.open(testFilePath, file::access_mode::Write, file::open_disposition::OpenExisting));
+	REQUIRE(f.size() == sizeof(originalContents));
+	REQUIRE(!f.open(testFilePath, file::access_mode::Read, file::open_disposition::CreateOrTruncate));
+	REQUIRE(!f.is_open());
+
+	REQUIRE(!f.open(testFilePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(!f.is_open());
+	REQUIRE(f.open(testFilePath, file::access_mode::Read, file::open_disposition::OpenExisting));
+	char contentsAfterFailedCreate[sizeof(originalContents)]{};
+	REQUIRE(f.read(contentsAfterFailedCreate, sizeof(contentsAfterFailedCreate)) == sizeof(contentsAfterFailedCreate));
+	REQUIRE(::memcmp(contentsAfterFailedCreate, originalContents, sizeof(originalContents)) == 0);
+	REQUIRE(f.close());
+
+	REQUIRE(f.open(testFilePath, file::access_mode::Write, file::open_disposition::OpenOrCreate));
+	REQUIRE(f.size() == sizeof(originalContents));
+	REQUIRE(f.close());
+
+	REQUIRE(f.open(testFilePath, file::access_mode::Write, file::open_disposition::CreateOrTruncate));
+	REQUIRE(f.size() == 0);
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+
+	auto newFile = file::open_file(testFilePath, file::access_mode::Write, file::open_disposition::CreateNew);
+	REQUIRE(newFile);
+	REQUIRE(newFile.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("Navigating a file - read-only", "[file]")
 {
 try {
@@ -108,7 +148,7 @@ try {
 
 	{
 		file f;
-		REQUIRE(f.open(testFilePath, file::open_mode::Write));
+		REQUIRE(f.open(testFilePath, file::access_mode::Write));
 		REQUIRE(f.write(testString, sizeof(testString)));
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.pos() == f.size());
@@ -118,7 +158,7 @@ try {
 
 	{
 		file f;
-		REQUIRE(f.open(testFilePath, file::open_mode::Read));
+		REQUIRE(f.open(testFilePath, file::access_mode::Read));
 		REQUIRE(f.pos() == 0);
 		REQUIRE(f.at_end() == false);
 		REQUIRE(f.set_pos(16));
@@ -165,7 +205,7 @@ try {
 
 	{
 		file f;
-		REQUIRE(f.open(testFilePath, file::open_mode::Write));
+		REQUIRE(f.open(testFilePath, file::access_mode::Write));
 		REQUIRE(f.write(testString, sizeof(testString)));
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.pos() == f.size());
@@ -181,7 +221,7 @@ try {
 
 	{
 		file f;
-		REQUIRE(f.open(testFilePath, file::open_mode::Read));
+		REQUIRE(f.open(testFilePath, file::access_mode::Read));
 		REQUIRE(f.pos() == 0);
 		REQUIRE(f.at_end() == false);
 
@@ -213,7 +253,7 @@ try {
 
 	{
 		file f;
-		REQUIRE(f.open(testFilePath, file::open_mode::Write));
+		REQUIRE(f.open(testFilePath, file::access_mode::Write));
 		REQUIRE(f.write(testString, sizeof(testString)));
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.pos() == f.size());
@@ -223,7 +263,7 @@ try {
 
 	{
 		file f;
-		REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
+		REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
 		REQUIRE(f.pos() == 0);
 		REQUIRE(f.size() == sizeof(testString));
 		REQUIRE(f.at_end() == false);
@@ -282,7 +322,7 @@ TEST_CASE("failed close relinquishes descriptor ownership", "[file]")
 	file::delete_file(guardFilePath);
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::Write));
+	REQUIRE(f.open(testFilePath, file::access_mode::Write));
 
 	struct stat targetInfo;
 	REQUIRE(::stat(testFilePath, &targetInfo) == 0);
@@ -331,7 +371,7 @@ try {
 
 	file f;
 
-	REQUIRE(f.open("test.file", file::open_mode::ReadWrite) == true);
+	REQUIRE(f.open("test.file", file::access_mode::ReadWrite) == true);
 	REQUIRE(f.write(testString, std::size(testString)) == std::size(testString));
 	REQUIRE(f.at_end());
 	REQUIRE(f.size() == sizeof(testString));
@@ -372,7 +412,7 @@ TEST_CASE("resize and preallocate", "[file]")
 	static constexpr uint64_t largeSize = 4u * 1024u * 1024u; // Large enough that block-size rounding is negligible
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
 	REQUIRE(f.size() == 0);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(!f.preallocate(largeSize)); // Preallocation cannot extend the logical file
@@ -411,7 +451,7 @@ try {
 	file::delete_file(testFilePath);
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::Write));
+	REQUIRE(f.open(testFilePath, file::access_mode::Write));
 	REQUIRE(f.is_open() == true);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
@@ -424,7 +464,7 @@ try {
 	REQUIRE(f.preallocate(0));
 	REQUIRE(f.close());
 
-	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
 	REQUIRE(f.is_open() == true);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
@@ -448,7 +488,7 @@ try {
 	REQUIRE(f.close());
 
 
-	REQUIRE(f.open(testFilePath, file::open_mode::Read));
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
 	REQUIRE(f.is_open() == true);
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
@@ -473,7 +513,7 @@ catch (...) {
 bool createTestFile(const char* path, const char* contents, size_t size)
 {
 	file f;
-	if (!f.open(path, file::open_mode::Write)) return false;
+	if (!f.open(path, file::access_mode::Write)) return false;
 	if (f.write(contents, size) != size) return false;
 	if (!f.close()) return false;
 	return true;
@@ -488,7 +528,7 @@ TEST_CASE("pread", "[file]")
 	REQUIRE(createTestFile(testFilePath, testString, sizeof(testString)));
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::Read));
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
 	char buf[sizeof(testString)];
 	REQUIRE(f.pread(buf, 5, 20) == 5);
 	REQUIRE(::memcmp(buf, "jumps", 5) == 0);
@@ -508,13 +548,13 @@ TEST_CASE("pwrite", "[file]")
 	file::delete_file(testFilePath);
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::Write));
+	REQUIRE(f.open(testFilePath, file::access_mode::Write));
 	REQUIRE(f.pwrite(testString, sizeof(testString), 0) == sizeof(testString));
 	REQUIRE(f.pwrite("small", 5, 4) == 5);
 	REQUIRE(f.pwrite("cat", 3, 40) == 3);
 	REQUIRE(f.close());
 
-	REQUIRE(f.open(testFilePath, file::open_mode::Read));
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
 	char buf[sizeof(testString)];
 	REQUIRE(f.read(buf, sizeof(testString)) == sizeof(testString));
 	REQUIRE(::memcmp(buf, "The small brown fox jumps over the lazy cat", sizeof(testString)) == 0);
@@ -530,11 +570,11 @@ TEST_CASE("write-read sharing", "[file]")
 	file::delete_file(testFilePath);
 
 	file fw;
-	REQUIRE(fw.open(testFilePath, file::open_mode::Write));
+	REQUIRE(fw.open(testFilePath, file::access_mode::Write));
 	REQUIRE(fw.write(testString, sizeof(testString)) == sizeof(testString));
 
 	file fr;
-	REQUIRE(fr.open(testFilePath, file::open_mode::Read));
+	REQUIRE(fr.open(testFilePath, file::access_mode::Read));
 	char buf[sizeof(testString)] = { 0 };
 	REQUIRE(fr.read(buf, 1) == 1);
 	REQUIRE(buf[0] == 'T');
@@ -555,7 +595,7 @@ TEST_CASE("mmap - readonly", "[file]")
 	REQUIRE(createTestFile(testFilePath, testString, size));
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::Read));
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
 
 	uint64_t offset = 0;
 	SECTION("0 offset") {
@@ -592,7 +632,7 @@ TEST_CASE("mmap - write", "[file]")
 	REQUIRE(createTestFile(testFilePath, testString, 0));
 
 	file f;
-	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
 	REQUIRE(f.resize(size));
 
 	uint64_t offset = 0;
@@ -610,7 +650,7 @@ TEST_CASE("mmap - write", "[file]")
 
 	REQUIRE(f.close());
 
-	f.open(testFilePath, file::open_mode::Read);
+	f.open(testFilePath, file::access_mode::Read);
 	char buf[size];
 	::memset(buf, 255, size);
 
@@ -629,13 +669,13 @@ TEST_CASE("Factory method", "[file]")
 	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
 	file::delete_file(testFilePath);
 
-	auto f = file::open_file(testFilePath, file::open_mode::Write);
+	auto f = file::open_file(testFilePath, file::access_mode::Write);
 	REQUIRE(f);
 	REQUIRE(f.write(testString, sizeof(testString)) == sizeof(testString));
 	REQUIRE(f.close());
 	REQUIRE(!f);
 
-	f = file::open_file(testFilePath, file::open_mode::Read);
+	f = file::open_file(testFilePath, file::access_mode::Read);
 	REQUIRE(f);
 	char buf[sizeof(testString)] = { 0 };
 	REQUIRE(f.read(buf, sizeof(testString)) == sizeof(testString));
@@ -653,7 +693,7 @@ TEST_CASE("Moving a file object", "[file]")
 	file::delete_file(testFilePath);
 	REQUIRE(createTestFile(testFilePath, "0", 0));
 
-	auto f = file::open_file(testFilePath, file::open_mode::Read);
+	auto f = file::open_file(testFilePath, file::access_mode::Read);
 	REQUIRE(f);
 	auto f2 = std::move(f);
 	REQUIRE(f2);
