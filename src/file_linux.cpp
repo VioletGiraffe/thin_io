@@ -72,13 +72,14 @@ bool file_impl::close() noexcept
 {
 	for (const auto& mapping: _memoryMappings)
 		::munmap(mapping.addr, mapping.length);
+	_memoryMappings.clear();
 
-	if (is_open() && ::close(_fd) == 0)
-	{
-		_fd = -1;
-		return true;
-	}
-	return false;
+	if (!is_open())
+		return false;
+
+	const int fd = _fd;
+	_fd = -1; // A failed close is not safely retryable because the descriptor number may already have been reused.
+	return ::close(fd) == 0;
 }
 
 std::optional<uint64_t> file_impl::read(void *dest, uint64_t size) noexcept

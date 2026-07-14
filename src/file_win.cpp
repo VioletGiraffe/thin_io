@@ -126,6 +126,7 @@ bool file_impl::close() noexcept
 	// Unmap memory before closing the file
 	for (const auto& mapping : _memoryMappings)
 		do_unmap(mapping);
+	_memoryMappings.clear();
 
 	if (is_open() && ::CloseHandle(_h) != 0)
 	{

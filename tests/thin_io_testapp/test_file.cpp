@@ -14,7 +14,9 @@ using namespace thin_io;
 #define REQUIRE_WIN(...) (void)0
 #define REQUIRE_LINUX(...) REQUIRE(__VA_ARGS__)
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 // Actual on-disk allocation in bytes: ~0 for a sparse file, >= the logical size when the space is really reserved
 static uint64_t allocatedSizeOnDisk(const char* path)
 {
@@ -270,6 +272,55 @@ catch (...) {
 	FAIL("file must not throw!");
 }
 }
+
+#ifndef _WIN32
+TEST_CASE("failed close relinquishes descriptor ownership", "[file]")
+{
+	static constexpr char testFilePath[] = "test.file";
+	static constexpr char guardFilePath[] = "close-guard.file";
+	file::delete_file(testFilePath);
+	file::delete_file(guardFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::open_mode::Write));
+
+	struct stat targetInfo;
+	REQUIRE(::stat(testFilePath, &targetInfo) == 0);
+
+	int ownedDescriptor = -1;
+	for (int descriptor = 0; descriptor < 4096; ++descriptor)
+	{
+		struct stat descriptorInfo;
+		if (::fstat(descriptor, &descriptorInfo) == 0 && descriptorInfo.st_dev == targetInfo.st_dev && descriptorInfo.st_ino == targetInfo.st_ino)
+		{
+			ownedDescriptor = descriptor;
+			break;
+		}
+	}
+	REQUIRE(ownedDescriptor >= 0);
+
+	// Simulate close() reporting an error after the descriptor has ceased to belong to the file object.
+	REQUIRE(::close(ownedDescriptor) == 0);
+	REQUIRE(!f.close());
+	REQUIRE(!f.is_open());
+
+	int guardDescriptor = ::open(guardFilePath, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+	REQUIRE(guardDescriptor >= 0);
+	if (guardDescriptor != ownedDescriptor)
+	{
+		REQUIRE(::dup2(guardDescriptor, ownedDescriptor) == ownedDescriptor);
+		REQUIRE(::close(guardDescriptor) == 0);
+		guardDescriptor = ownedDescriptor;
+	}
+
+	REQUIRE(!f.close());
+	REQUIRE(::fcntl(guardDescriptor, F_GETFD) != -1);
+	REQUIRE(::close(guardDescriptor) == 0);
+
+	REQUIRE(file::delete_file(testFilePath));
+	REQUIRE(file::delete_file(guardFilePath));
+}
+#endif
 
 TEST_CASE("resize", "[file]")
 {
