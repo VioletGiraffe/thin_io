@@ -75,14 +75,20 @@ public:
 		return _impl.set_pos(newPos);
 	}
 
-	// Can resize to a smaller or larger size
-	// This function also sets file position to the end
-	//
-	// !!!
-	// Does not change file pointer on Windows!
-	// !!!
-	inline bool truncate(uint64_t newFileSize) noexcept {
-		return _impl.truncate(newFileSize);
+	// Sets the exact logical file size, preserving existing contents within the new size. Growing does not guarantee
+	// physical allocation, and the contents of the extended range are platform-dependent; call preallocate() separately
+	// when storage must be reserved. Does not change the file position, which may consequently remain past the new end of
+	// file when shrinking. Returns false on failure; error_code() provides the native reason.
+	[[nodiscard]] inline bool resize(uint64_t newFileSize) noexcept {
+		return _impl.resize(newFileSize);
+	}
+
+	// Reserves physical storage for the existing logical range [0, size), so writes to that range will not fail for lack
+	// of filesystem space after a successful call. size must not exceed the current logical file size. The implementation
+	// may reserve more storage than requested, but does not change the logical size, file contents, or file position.
+	// Returns false when preallocation is unsupported or fails; error_code() provides the native reason.
+	[[nodiscard]] inline bool preallocate(uint64_t size) noexcept {
+		return _impl.preallocate(size);
 	}
 
 	[[nodiscard]] inline bool fsync() noexcept {
@@ -106,8 +112,12 @@ public:
 		return _impl.size();
 	}
 
+	// Returns true when the current position is at or past the logical end of file. Returns false if either value cannot
+	// be queried.
 	[[nodiscard]] inline bool at_end() const noexcept {
-		return _impl.at_end();
+		const auto currentPosition = pos();
+		const auto currentSize = size();
+		return currentPosition && currentSize && *currentPosition >= *currentSize;
 	}
 
 	static bool delete_file(const char* filePath) noexcept {

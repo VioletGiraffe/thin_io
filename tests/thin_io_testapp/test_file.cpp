@@ -271,7 +271,7 @@ catch (...) {
 }
 }
 
-TEST_CASE("truncate", "[file]")
+TEST_CASE("resize", "[file]")
 {
 try {
 	static constexpr const char testFilePath[] = "test.file";
@@ -284,10 +284,11 @@ try {
 	REQUIRE(f.write(testString, std::size(testString)) == std::size(testString));
 	REQUIRE(f.at_end());
 	REQUIRE(f.size() == sizeof(testString));
-	REQUIRE(f.truncate(3));
-	//REQUIRE(f.at_end()); - truncate does not change file pointer on Windows!
+	const auto positionBeforeResize = f.pos();
+	REQUIRE(f.resize(3));
 	REQUIRE(f.size() == 3);
-	//REQUIRE(f.pos() == 3); - truncate does not change file pointer on Windows!
+	REQUIRE(f.pos() == positionBeforeResize);
+	REQUIRE(f.at_end());
 	char buf[sizeof(testString)] = {0};
 	REQUIRE(f.set_pos(0));
 	REQUIRE(!f.at_end());
@@ -295,12 +296,14 @@ try {
 	REQUIRE(f.at_end());
 	REQUIRE(::memcmp(buf, "The", 3) == 0);
 
-	REQUIRE(f.truncate(0));
-	//REQUIRE(f.at_end()); - truncate does not change file pointer on Windows!
+	const auto positionBeforeSecondResize = f.pos();
+	REQUIRE(f.resize(0));
 	REQUIRE(f.size() == 0);
-	//REQUIRE(f.pos() == 0);
+	REQUIRE(f.pos() == positionBeforeSecondResize);
+	REQUIRE(f.at_end());
 	REQUIRE(f.read(buf, 1) == 0);
 	REQUIRE(f.close());
+	REQUIRE(!f.at_end());
 
 	// Testing for auto-closing the file on scope exit - deleting will fail if it's still open
 	REQUIRE(file::delete_file(testFilePath));
@@ -310,7 +313,7 @@ catch (...) {
 }
 }
 
-TEST_CASE("truncate reserves space on growth", "[file]")
+TEST_CASE("resize and preallocate", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";
 	file::delete_file(testFilePath);
@@ -320,31 +323,31 @@ TEST_CASE("truncate reserves space on growth", "[file]")
 	file f;
 	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
 	REQUIRE(f.size() == 0);
+	REQUIRE(f.pos() == 0);
+	REQUIRE(!f.preallocate(largeSize)); // Preallocation cannot extend the logical file
+	REQUIRE(f.size() == 0);
+	REQUIRE(f.pos() == 0);
 
-	// Growing must set the logical size and physically reserve the blocks rather than create a sparse file
-	REQUIRE(f.truncate(largeSize));
+	static constexpr char preservedContent[] = "existing data";
+	REQUIRE(f.write(preservedContent, sizeof(preservedContent)) == sizeof(preservedContent));
+	const auto positionBeforeGrowth = f.pos();
+	REQUIRE(f.resize(largeSize));
 	REQUIRE(f.size() == largeSize);
+	REQUIRE(f.pos() == positionBeforeGrowth);
+	REQUIRE(f.preallocate(largeSize));
+	REQUIRE(f.size() == largeSize);
+	REQUIRE(f.pos() == positionBeforeGrowth);
 	REQUIRE_LINUX(allocatedSizeOnDisk(testFilePath) >= largeSize); // Linux + macOS: real allocation, not a sparse file
 
-	// The reserved range must read back as zeros
-	char buf[4096];
-	::memset(buf, 0xFF, sizeof(buf));
 	REQUIRE(f.set_pos(0));
-	REQUIRE(f.read(buf, sizeof(buf)) == sizeof(buf));
-	bool allZero = true;
-	for (const char c : buf)
-	{
-		if (c != 0)
-		{
-			allZero = false;
-			break;
-		}
-	}
-	REQUIRE(allZero);
+	char contentAfterPreallocation[sizeof(preservedContent)]{};
+	REQUIRE(f.read(contentAfterPreallocation, sizeof(contentAfterPreallocation)) == sizeof(contentAfterPreallocation));
+	REQUIRE(::memcmp(contentAfterPreallocation, preservedContent, sizeof(preservedContent)) == 0);
 
-	// Shrinking must still reduce the logical size
-	REQUIRE(f.truncate(1024));
+	const auto positionBeforeShrink = f.pos();
+	REQUIRE(f.resize(1024));
 	REQUIRE(f.size() == 1024);
+	REQUIRE(f.pos() == positionBeforeShrink);
 
 	REQUIRE(f.close());
 	REQUIRE(file::delete_file(testFilePath));
@@ -366,7 +369,8 @@ try {
 	REQUIRE(f.size() == 0);
 	REQUIRE(f.at_end());
 	REQUIRE(f.set_pos(0));
-	REQUIRE(f.truncate(0));
+	REQUIRE(f.resize(0));
+	REQUIRE(f.preallocate(0));
 	REQUIRE(f.close());
 
 	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
@@ -387,8 +391,9 @@ try {
 	REQUIRE(f.pos() == 0);
 	REQUIRE(f.size() == 0);
 	REQUIRE(f.at_end());
-	REQUIRE(f.set_pos(100)); // The call succeeds - the file is read/write! Seek punches a hole.
+	REQUIRE(f.set_pos(100)); // Seeking past EOF is valid and does not change the logical size.
 	REQUIRE(f.size() == 0);
+	REQUIRE(f.at_end());
 	REQUIRE(f.close());
 
 
@@ -404,7 +409,7 @@ try {
 	REQUIRE(f.set_pos(0));
 	REQUIRE(f.set_pos(100));
 	REQUIRE(f.size() == 0);
-	//REQUIRE(f.at_end());
+	REQUIRE(f.at_end());
 	REQUIRE(f.close());
 
 	REQUIRE(file::delete_file(testFilePath));
@@ -537,7 +542,7 @@ TEST_CASE("mmap - write", "[file]")
 
 	file f;
 	REQUIRE(f.open(testFilePath, file::open_mode::ReadWrite));
-	REQUIRE(f.truncate(size));
+	REQUIRE(f.resize(size));
 
 	uint64_t offset = 0;
 	SECTION("0 offset") {

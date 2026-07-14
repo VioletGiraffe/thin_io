@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <limits>
 
 #ifdef __APPLE__
 #define O_LARGEFILE 0 // Not needed
@@ -124,37 +125,70 @@ bool file_impl::set_pos(uint64_t newPos) noexcept
 	return pos == static_cast<off64_t>(newPos);
 }
 
-bool file_impl::truncate(uint64_t newFileSize) noexcept
+bool file_impl::resize(const uint64_t newFileSize) noexcept
 {
-	const auto currentSize = size();
-	if (!currentSize) [[unlikely]]
-		return false;
-
-	// Shrinking (or no change) only needs to set the logical size
-	if (newFileSize <= *currentSize)
-		return ::ftruncate64(_fd, static_cast<off64_t>(newFileSize)) == 0;
-
-	// Growing: physically reserve the new space so a subsequent write can't run out of disk space, and to reduce fragmentation
-#ifdef __APPLE__
-	// macOS has neither fallocate nor posix_fallocate; F_PREALLOCATE reserves the blocks, then ftruncate sets the logical size
-	fstore_t fst;
-	fst.fst_flags = F_ALLOCATECONTIG; // Prefer a single contiguous extent
-	fst.fst_posmode = F_PEOFPOSMODE; // Allocate the requested length past the current physical end of file
-	fst.fst_offset = 0;
-	fst.fst_length = static_cast<off_t>(newFileSize - *currentSize);
-	fst.fst_bytesalloc = 0;
-	if (::fcntl(_fd, F_PREALLOCATE, &fst) == -1) [[unlikely]]
+	if (newFileSize > static_cast<uint64_t>(std::numeric_limits<off64_t>::max())) [[unlikely]]
 	{
-		fst.fst_flags = F_ALLOCATEALL; // Fall back to a possibly fragmented allocation
-		if (::fcntl(_fd, F_PREALLOCATE, &fst) == -1) [[unlikely]]
-			return false;
+		errno = EFBIG;
+		return false;
 	}
 
-	return ::ftruncate(_fd, static_cast<off_t>(newFileSize)) == 0;
+	return ::ftruncate64(_fd, static_cast<off64_t>(newFileSize)) == 0;
+}
+
+bool file_impl::preallocate(const uint64_t requestedSize) noexcept
+{
+	struct stat64 fileInfo;
+	if (::fstat64(_fd, &fileInfo) != 0) [[unlikely]]
+		return false;
+
+	if (requestedSize > static_cast<uint64_t>(fileInfo.st_size) || requestedSize > static_cast<uint64_t>(std::numeric_limits<off64_t>::max())) [[unlikely]]
+	{
+		errno = requestedSize > static_cast<uint64_t>(std::numeric_limits<off64_t>::max()) ? EFBIG : EINVAL;
+		return false;
+	}
+
+	if (requestedSize == 0)
+		return true;
+
+#ifdef __APPLE__
+	const uint64_t allocatedBlocks = static_cast<uint64_t>(fileInfo.st_blocks);
+	const uint64_t requestedBlocks = requestedSize / 512 + (requestedSize % 512 != 0);
+	if (allocatedBlocks >= requestedBlocks)
+		return true;
+
+	// st_blocks reports the file's existing backing store. F_PREALLOCATE adds the missing amount at the physical EOF
+	// without changing the logical size.
+	uint64_t bytesToAllocate = requestedSize - allocatedBlocks * 512;
+	fstore_t fst{};
+	fst.fst_flags = F_ALLOCATECONTIG; // Prefer a single contiguous extent
+	fst.fst_posmode = F_PEOFPOSMODE;
+	fst.fst_offset = 0;
+	fst.fst_length = static_cast<off_t>(bytesToAllocate);
+	const bool contiguousAllocationSucceeded = ::fcntl(_fd, F_PREALLOCATE, &fst) != -1;
+	if (contiguousAllocationSucceeded && fst.fst_bytesalloc >= fst.fst_length)
+		return true;
+
+	if (contiguousAllocationSucceeded && fst.fst_bytesalloc > 0)
+		bytesToAllocate -= static_cast<uint64_t>(fst.fst_bytesalloc);
+
+	fst.fst_flags = F_ALLOCATEALL; // Fall back to a possibly fragmented allocation
+	fst.fst_length = static_cast<off_t>(bytesToAllocate);
+	fst.fst_bytesalloc = 0;
+	if (::fcntl(_fd, F_PREALLOCATE, &fst) == -1) [[unlikely]]
+		return false;
+
+	if (fst.fst_bytesalloc < fst.fst_length) [[unlikely]]
+	{
+		errno = ENOSPC;
+		return false;
+	}
+
+	return true;
 #else
-	// posix_fallocate reports the error via its return value rather than errno, and on filesystems without native
-	// preallocation falls back to writing zeros - which still guarantees the space, at the cost of the extra I/O
-	const int err = ::posix_fallocate64(_fd, static_cast<off64_t>(*currentSize), static_cast<off64_t>(newFileSize - *currentSize));
+	// The requested range is already within the logical file size, so posix_fallocate does not extend the file.
+	// It reports errors through its return value rather than errno.
+	const int err = ::posix_fallocate64(_fd, 0, static_cast<off64_t>(requestedSize));
 	if (err != 0) [[unlikely]]
 	{
 		errno = err;
@@ -223,11 +257,6 @@ bool file_impl::unmap(void* mapAddress) noexcept
 	}
 
 	return false;
-}
-
-bool file_impl::at_end() const noexcept
-{
-	return pos() == size();
 }
 
 int file_impl::error_code() noexcept

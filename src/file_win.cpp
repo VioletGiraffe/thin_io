@@ -8,6 +8,8 @@ ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 #include <string.h> // memcpy
 #include <Windows.h>
 
+#include <limits>
+
 using namespace thin_io;
 
 static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); // Empty base optimiation test
@@ -198,12 +200,39 @@ bool file_impl::set_pos(uint64_t newPos) noexcept
 	return ::SetFilePointerEx(_h, offset, nullptr, FILE_BEGIN) != 0;
 }
 
-// This function also sets file position to the end
-bool file_impl::truncate(uint64_t newFileSize) noexcept
+bool file_impl::resize(const uint64_t newFileSize) noexcept
 {
+	if (newFileSize > static_cast<uint64_t>(std::numeric_limits<LONGLONG>::max())) [[unlikely]]
+	{
+		::SetLastError(ERROR_FILE_TOO_LARGE);
+		return false;
+	}
+
 	FILE_END_OF_FILE_INFO eof;
 	eof.EndOfFile.QuadPart = static_cast<LONGLONG>(newFileSize);
 	return ::SetFileInformationByHandle(_h, FileEndOfFileInfo, &eof, sizeof(eof)) != 0;
+}
+
+bool file_impl::preallocate(const uint64_t requestedSize) noexcept
+{
+	const auto currentSize = size();
+	if (!currentSize) [[unlikely]]
+		return false;
+
+	if (requestedSize > *currentSize) [[unlikely]]
+	{
+		::SetLastError(ERROR_INVALID_PARAMETER);
+		return false;
+	}
+
+	if (requestedSize == 0)
+		return true;
+
+	// FileAllocationInfo describes total allocation rather than a range. Allocating the current logical size may reserve
+	// more than requested, but avoids shrinking EOF or pre-existing allocation below EOF.
+	FILE_ALLOCATION_INFO allocation;
+	allocation.AllocationSize.QuadPart = static_cast<LONGLONG>(*currentSize);
+	return ::SetFileInformationByHandle(_h, FileAllocationInfo, &allocation, sizeof(allocation)) != 0;
 }
 
 bool file_impl::fsync() noexcept
@@ -297,11 +326,6 @@ bool file_impl::unmap(void* mapAddress) noexcept
 	}
 
 	return false;
-}
-
-bool file_impl::at_end() const noexcept
-{
-	return pos() == size();
 }
 
 uint32_t file_impl::error_code() noexcept
