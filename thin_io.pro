@@ -45,3 +45,7 @@ win*{
 	HEADERS += $$files(src/*_linux.hpp, true)
 	SOURCES += $$files(src/*_linux.cpp, true)
 }
+
+win*{
+	DEFINES += WIN32_LEAN_AND_MEAN NOMINMAX
+}
