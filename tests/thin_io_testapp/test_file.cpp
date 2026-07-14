@@ -135,6 +135,11 @@ TEST_CASE("open dispositions", "[file]")
 	auto newFile = file::open_file(testFilePath, file::access_mode::Write, file::open_disposition::CreateNew);
 	REQUIRE(newFile);
 	REQUIRE(newFile.close());
+#ifndef _WIN32
+	struct stat createdFileInfo;
+	REQUIRE(::stat(testFilePath, &createdFileInfo) == 0);
+	REQUIRE((createdFileInfo.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0);
+#endif
 	REQUIRE(file::delete_file(testFilePath));
 }
 

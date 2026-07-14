@@ -77,7 +77,6 @@ bool file_impl::open(const char* path, const access_mode accessMode, const open_
 	{
 		permissions |= (S_IRUSR | S_IRGRP | S_IROTH);
 		permissions |= (S_IWUSR | S_IWGRP | S_IWOTH);
-		permissions |= (S_IXUSR | S_IXGRP | S_IXOTH);
 	}
 
 	_fd = ::open(path, flags, permissions);
