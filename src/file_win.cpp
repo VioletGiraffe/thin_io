@@ -7,6 +7,7 @@ ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 #include <assert.h>
 #include <string.h> // memcpy
 #include <Windows.h>
+#include <winternl.h>
 
 #include <limits>
 
@@ -39,15 +40,7 @@ static inline void to_wide_unc_path(const char* str, WCHAR(&wCharArray)[N])
 }
 
 #if !(defined(THIN_IO_WANT_FDATASYNC) && THIN_IO_WANT_FDATASYNC == 0)
-struct IO_STATUS_BLOCK {
-	union {
-		NTSTATUS Status;
-		PVOID    Pointer;
-	};
-	ULONG_PTR Information;
-};
-
-using NtFlushBuffersFileEx_t = NTSTATUS(__stdcall*) (HANDLE, ULONG, PVOID, ULONG, IO_STATUS_BLOCK*);
+using NtFlushBuffersFileEx_t = NTSTATUS(NTAPI*) (HANDLE, ULONG, PVOID, ULONG, PIO_STATUS_BLOCK);
 static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileEx_t {
 	auto* lib = ::LoadLibraryA("ntdll.dll");
 	if (!lib)
