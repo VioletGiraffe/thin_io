@@ -39,17 +39,6 @@ static inline void to_wide_unc_path(const char* str, WCHAR(&wCharArray)[N])
 	}
 }
 
-#if !(defined(THIN_IO_WANT_FDATASYNC) && THIN_IO_WANT_FDATASYNC == 0)
-using NtFlushBuffersFileEx_t = NTSTATUS(NTAPI*) (HANDLE, ULONG, PVOID, ULONG, PIO_STATUS_BLOCK);
-static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileEx_t {
-	auto* lib = ::LoadLibraryA("ntdll.dll");
-	if (!lib)
-		return nullptr;
-	auto* func = ::GetProcAddress(lib, "NtFlushBuffersFileEx");
-	return (NtFlushBuffersFileEx_t)func;
-}();
-#endif
-
 [[nodiscard]] inline constexpr DWORD accessMask(file_constants::access_mode mode)
 {
 	DWORD access = 0;
@@ -249,6 +238,15 @@ bool file_impl::fdatasync() noexcept
 {
 #if !(defined(THIN_IO_WANT_FDATASYNC) && THIN_IO_WANT_FDATASYNC == 0)
 	static constexpr NTSTATUS STATUS_SUCCESS = 0;
+
+	using NtFlushBuffersFileEx_t = NTSTATUS(NTAPI*) (HANDLE, ULONG, PVOID, ULONG, PIO_STATUS_BLOCK);
+	static NtFlushBuffersFileEx_t NtFlushBuffersFileEx = []() -> NtFlushBuffersFileEx_t {
+		auto* lib = ::LoadLibraryA("ntdll.dll");
+		if (!lib)
+			return nullptr;
+		auto* func = ::GetProcAddress(lib, "NtFlushBuffersFileEx");
+		return (NtFlushBuffersFileEx_t)func;
+	}();
 
 	IO_STATUS_BLOCK iosb;
 	::memset(&iosb, 0, sizeof(iosb));
