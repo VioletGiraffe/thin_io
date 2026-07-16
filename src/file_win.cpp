@@ -1,6 +1,6 @@
 #include "file_win.hpp"
 #include "enum_helpers.hpp"
-#include "unc_path_win.hpp"
+#include "windows_path_win.hpp"
 
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::access_mode);
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
@@ -71,15 +71,19 @@ bool file_impl::open(const char* path, const access_mode accessMode, const open_
 		return false;
 	}
 
-	WCHAR wPath[32768];
-	to_wide_unc_path(path, wPath);
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+	{
+		::SetLastError(nativePath.error_code());
+		return false;
+	}
 
 	const auto access = accessMask(accessMode);
 	const auto sharing = shareMask(accessMode, sharingMode);
 	const auto dispositionValue = creationDisposition(disposition);
 	const auto flagsAndAttrs = flags(cacheMode);
 
-	_h = ::CreateFileW(wPath,
+	_h = ::CreateFileW(nativePath.c_str(),
 					   access,
 					   sharing,
 					   nullptr, // Security attrs
@@ -336,10 +340,14 @@ std::string file_impl::text_for_error(uint32_t ec) noexcept
 
 bool file_impl::delete_file(const char *filePath) noexcept
 {
-	WCHAR wPath[32768];
-	to_wide_unc_path(filePath, wPath);
+	windows_path_buffer nativePath{filePath};
+	if (!nativePath) [[unlikely]]
+	{
+		::SetLastError(nativePath.error_code());
+		return false;
+	}
 
-	return ::DeleteFileW(wPath) != 0;
+	return ::DeleteFileW(nativePath.c_str()) != 0;
 }
 
 bool file_impl::do_unmap(const Mapping& mapping) noexcept

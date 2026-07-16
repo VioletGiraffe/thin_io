@@ -1,5 +1,5 @@
 #include "fs.hpp"
-#include "unc_path_win.hpp"
+#include "windows_path_win.hpp"
 
 #include <Windows.h>
 
@@ -42,11 +42,15 @@ bool set_times(const char* path, const entry_times& times) noexcept
 		return false;
 	}
 
-	WCHAR wPath[32768];
-	to_wide_unc_path(path, wPath);
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+	{
+		::SetLastError(nativePath.error_code());
+		return false;
+	}
 
 	// FILE_FLAG_BACKUP_SEMANTICS is what makes a handle to a directory possible; it is a no-op for regular files.
-	const HANDLE h = ::CreateFileW(wPath, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	const HANDLE h = ::CreateFileW(nativePath.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 								   nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 	if (h == INVALID_HANDLE_VALUE) [[unlikely]]
 		return false;
@@ -86,12 +90,16 @@ bool set_times(const char* path, const entry_times& times) noexcept
 
 std::optional<entry_times> get_times(const char* path) noexcept
 {
-	WCHAR wPath[32768];
-	to_wide_unc_path(path, wPath);
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+	{
+		::SetLastError(nativePath.error_code());
+		return {};
+	}
 
 	// Reads the metadata without opening the path, so it works for directories and cannot perturb the access time
 	WIN32_FILE_ATTRIBUTE_DATA attributes;
-	if (::GetFileAttributesExW(wPath, GetFileExInfoStandard, &attributes) == 0) [[unlikely]]
+	if (::GetFileAttributesExW(nativePath.c_str(), GetFileExInfoStandard, &attributes) == 0) [[unlikely]]
 		return {};
 
 	entry_times times;

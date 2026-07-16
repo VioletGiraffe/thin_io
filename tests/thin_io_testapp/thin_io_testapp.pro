@@ -75,3 +75,5 @@ SOURCES += \
 	test_file_links.cpp \
 	test_fs.cpp \
 	tests_main.cpp
+
+win*:SOURCES += test_windows_path.cpp
