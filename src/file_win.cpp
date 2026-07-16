@@ -1,11 +1,12 @@
 #include "file_win.hpp"
 #include "enum_helpers.hpp"
+#include "unc_path_win.hpp"
 
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::access_mode);
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 
 #include <assert.h>
-#include <string.h> // memcpy
+#include <string.h> // memset
 #include <Windows.h>
 #include <winternl.h>
 
@@ -14,30 +15,6 @@ ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 using namespace thin_io;
 
 static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); // Empty base optimiation test
-
-template <size_t N>
-static inline void to_wide_unc_path(const char* str, WCHAR(&wCharArray)[N])
-{
-	const size_t path_length = ::strlen(str);
-	size_t prefix_length = 0;
-	if (path_length >= 2 && str[1] == ':') // Absolute path?
-	{
-		static constexpr WCHAR prefix[] = LR"(\\?\)";
-		prefix_length = std::size(prefix) - 1 /* null */;
-		::memcpy(wCharArray, prefix, prefix_length * sizeof(WCHAR));
-	}
-
-	const auto nChars = ::MultiByteToWideChar(CP_UTF8, 0, str, (int)path_length, wCharArray + prefix_length, (int)(N - prefix_length - 1));
-	wCharArray[prefix_length + nChars] = 0;
-
-	// Fix non-Windows slashes.
-	// TODO: is memchr faster?
-	for (size_t i = prefix_length; i < prefix_length + nChars; ++i)
-	{
-		if (wCharArray[i] == L'/')
-			wCharArray[i] = L'\\';
-	}
-}
 
 [[nodiscard]] inline constexpr DWORD accessMask(file_constants::access_mode mode)
 {

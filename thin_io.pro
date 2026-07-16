@@ -36,7 +36,8 @@ mac*|linux*{
 HEADERS += \
 	src/enum_helpers.hpp \
 	src/file.hpp \
-	src/file_interface.hpp
+	src/file_interface.hpp \
+	src/fs.hpp
 
 win*{
 	HEADERS += $$files(src/*_win.hpp, true)
