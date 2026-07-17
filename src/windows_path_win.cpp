@@ -152,7 +152,7 @@ windows_path_buffer::windows_path_buffer(const char* const utf8Path) noexcept
 	}
 
 	const int convertedCharacters = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8Path, -1,
-												_path.data(), requiredCharacters);
+																 _path.data(), requiredCharacters);
 	if (convertedCharacters == 0) [[unlikely]]
 	{
 		const DWORD conversionError = ::GetLastError();
