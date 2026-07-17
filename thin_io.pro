@@ -38,6 +38,7 @@ HEADERS += \
 	src/file.hpp \
 	src/file_interface.hpp \
 	src/filesystem_error.hpp \
+	src/filesystem_types.hpp \
 	src/fs.hpp
 
 SOURCES += src/filesystem_error.cpp

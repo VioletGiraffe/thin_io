@@ -1,8 +1,15 @@
 #include "fs.hpp"
 
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>    // AT_FDCWD
+#include <string.h>
 #include <sys/stat.h> // utimensat, UTIME_OMIT
 #include <time.h>
+
+#include <optional>
+#include <utility>
+#include <vector>
 
 #ifdef __APPLE__
 #include <sys/attr.h> // setattrlist, ATTR_CMN_CRTIME
@@ -93,6 +100,112 @@ std::optional<entry_times> get_times(const char* path) noexcept
 #endif
 
 	return times;
+}
+
+namespace {
+
+class directory_handle final {
+public:
+	explicit directory_handle(DIR* const directory) noexcept : _directory{directory} {}
+	~directory_handle() noexcept
+	{
+		if (_directory != nullptr)
+			::closedir(_directory);
+	}
+
+	directory_handle(const directory_handle&) = delete;
+	directory_handle& operator=(const directory_handle&) = delete;
+
+	[[nodiscard]] std::optional<filesystem_error> close() noexcept
+	{
+		if (::closedir(std::exchange(_directory, nullptr)) == 0)
+			return {};
+
+		return capture_last_filesystem_error();
+	}
+
+private:
+	DIR* _directory;
+};
+
+[[nodiscard]] entry_attributes attributesFromMode(const mode_t mode) noexcept
+{
+	entry_attributes attributes;
+	if (S_ISREG(mode))
+		attributes.kind = entry_kind::regular_file;
+	else if (S_ISDIR(mode))
+		attributes.kind = entry_kind::directory;
+	else
+		attributes.kind = entry_kind::other;
+	attributes.is_link = S_ISLNK(mode);
+	return attributes;
+}
+
+[[nodiscard]] filesystem_result<entry_attributes> attributesFromDirectoryEntry(DIR* const directory, const dirent& entry)
+{
+	switch (entry.d_type)
+	{
+	case DT_REG:
+		return entry_attributes{ .kind = entry_kind::regular_file };
+	case DT_DIR:
+		return entry_attributes{ .kind = entry_kind::directory };
+	case DT_LNK:
+		return entry_attributes{ .kind = entry_kind::other, .is_link = true };
+	case DT_UNKNOWN:
+	{
+		struct stat info;
+		if (::fstatat(::dirfd(directory), entry.d_name, &info, AT_SYMLINK_NOFOLLOW) != 0) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+		return attributesFromMode(info.st_mode);
+	}
+	default:
+		return entry_attributes{ .kind = entry_kind::other };
+	}
+}
+
+[[nodiscard]] bool isDotEntry(const char* const name) noexcept
+{
+	return ::strcmp(name, ".") == 0 || ::strcmp(name, "..") == 0;
+}
+
+} // namespace
+
+filesystem_result<std::vector<directory_entry>> list_directory(const char* const path)
+{
+	if (path == nullptr) [[unlikely]]
+	{
+		errno = EINVAL;
+		return std::unexpected{capture_last_filesystem_error()};
+	}
+
+	DIR* const nativeDirectory = ::opendir(path);
+	if (nativeDirectory == nullptr) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	directory_handle directory{nativeDirectory};
+	std::vector<directory_entry> entries;
+	for (;;)
+	{
+		errno = 0;
+		const dirent* const nativeEntry = ::readdir(nativeDirectory);
+		if (nativeEntry == nullptr)
+		{
+			if (errno != 0) [[unlikely]]
+				return std::unexpected{capture_last_filesystem_error()};
+			break;
+		}
+		if (isDotEntry(nativeEntry->d_name))
+			continue;
+
+		auto attributes = attributesFromDirectoryEntry(nativeDirectory, *nativeEntry);
+		if (!attributes) [[unlikely]]
+			return std::unexpected{attributes.error()};
+		entries.push_back(directory_entry{ .name = nativeEntry->d_name, .attributes = *attributes });
+	}
+
+	if (const auto closeError = directory.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return entries;
 }
 
 } // namespace thin_io

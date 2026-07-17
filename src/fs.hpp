@@ -1,7 +1,11 @@
 #pragma once
 
+#include "filesystem_error.hpp"
+#include "filesystem_types.hpp"
+
 #include <optional>
 #include <stdint.h>
+#include <vector>
 
 namespace thin_io {
 
@@ -48,6 +52,14 @@ inline constexpr bool creation_time_settable =
 [[nodiscard]] std::optional<entry_times> get_times(const char* path) noexcept;
 #ifdef _WIN32
 [[nodiscard]] std::optional<entry_times> get_times(const wchar_t* path) noexcept;
+#endif
+
+// Lists the immediate children of one directory. Returned names are native and relative to path; no entry is
+// recursively traversed. A failure after enumeration has started fails the whole listing rather than returning a
+// partial vector.
+[[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const char* path);
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path);
 #endif
 
 } // namespace thin_io

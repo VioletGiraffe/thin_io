@@ -4,6 +4,10 @@
 #include <Windows.h>
 
 #include <limits>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace thin_io {
 
@@ -140,6 +144,120 @@ std::optional<entry_times> get_times(const char* path) noexcept
 std::optional<entry_times> get_times(const wchar_t* path) noexcept
 {
 	return getTimesForPath(path);
+}
+
+namespace {
+
+class find_handle final {
+public:
+	explicit find_handle(const HANDLE handle) noexcept : _handle{handle} {}
+	~find_handle() noexcept
+	{
+		if (_handle != INVALID_HANDLE_VALUE)
+			::FindClose(_handle);
+	}
+
+	find_handle(const find_handle&) = delete;
+	find_handle& operator=(const find_handle&) = delete;
+
+	[[nodiscard]] std::optional<filesystem_error> close() noexcept
+	{
+		if (::FindClose(std::exchange(_handle, INVALID_HANDLE_VALUE)) != 0)
+			return {};
+
+		return capture_last_filesystem_error();
+	}
+
+private:
+	HANDLE _handle;
+};
+
+[[nodiscard]] entry_attributes attributesFromFindData(const WIN32_FIND_DATAW& data) noexcept
+{
+	entry_attributes attributes;
+	attributes.kind = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? entry_kind::directory : entry_kind::regular_file;
+	attributes.is_link = (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	attributes.sparse = (data.dwFileAttributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
+	attributes.compressed = (data.dwFileAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
+	attributes.reparse_tag = attributes.is_link ? data.dwReserved0 : 0;
+	return attributes;
+}
+
+[[nodiscard]] bool isDotEntry(const std::wstring_view name) noexcept
+{
+	return name == L"." || name == L"..";
+}
+
+void appendDirectoryEntry(std::vector<directory_entry>& entries, const WIN32_FIND_DATAW& data)
+{
+	if (isDotEntry(data.cFileName))
+		return;
+
+	directory_entry entry;
+	entry.name = data.cFileName;
+	entry.attributes = attributesFromFindData(data);
+	if (entry.attributes.kind == entry_kind::regular_file && !entry.attributes.is_link)
+		entry.logical_size = (static_cast<uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+	entries.push_back(std::move(entry));
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<std::vector<directory_entry>> listDirectory(const Character* path)
+{
+	windows_path_buffer searchPath{path};
+	if (!searchPath || !searchPath.append_directory_search_pattern()) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = searchPath.error_code() }};
+
+	WIN32_FIND_DATAW data{};
+	const HANDLE nativeHandle = ::FindFirstFileExW(searchPath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+	{
+		const filesystem_error enumerationError = capture_last_filesystem_error();
+		if (enumerationError.native_code != ERROR_FILE_NOT_FOUND)
+			return std::unexpected{enumerationError};
+
+		// FindFirstFileExW also uses ERROR_FILE_NOT_FOUND when the wildcard matched nothing. Verify the directory after
+		// the failed search so a path removed before enumeration cannot be mistaken for an empty directory.
+		windows_path_buffer directoryPath{path};
+		if (!directoryPath) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = directoryPath.error_code() }};
+		const DWORD attributes = ::GetFileAttributesW(directoryPath.c_str());
+		if (attributes == INVALID_FILE_ATTRIBUTES) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+		if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = ERROR_DIRECTORY }};
+		return std::vector<directory_entry>{};
+	}
+
+	find_handle handle{nativeHandle};
+	std::vector<directory_entry> entries;
+	for (;;)
+	{
+		appendDirectoryEntry(entries, data);
+		if (::FindNextFileW(nativeHandle, &data) != 0)
+			continue;
+
+		const filesystem_error error = capture_last_filesystem_error();
+		if (error.native_code != ERROR_NO_MORE_FILES) [[unlikely]]
+			return std::unexpected{error};
+		break;
+	}
+
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return entries;
+}
+
+} // namespace
+
+filesystem_result<std::vector<directory_entry>> list_directory(const char* path)
+{
+	return listDirectory(path);
+}
+
+filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path)
+{
+	return listDirectory(path);
 }
 
 } // namespace thin_io
