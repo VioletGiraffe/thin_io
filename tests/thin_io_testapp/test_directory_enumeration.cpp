@@ -157,33 +157,26 @@ TEST_CASE("list_directory captures invalid input and non-directory failures", "[
 }
 
 #ifndef _WIN32
-TEST_CASE("POSIX directory enumeration preserves native name bytes and identifies links and other entries", "[fs][directory][link]")
+TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs][directory][link]")
 {
-	static constexpr char directoryPath[] = "list-directory-posix-native";
-	static constexpr char targetPath[] = "list-directory-posix-native/target";
-	static constexpr char linkPath[] = "list-directory-posix-native/link";
-	static constexpr char fifoPath[] = "list-directory-posix-native/fifo";
-	const std::string nativeNamePath = std::string{directoryPath} + "/\xFF";
+	static constexpr char directoryPath[] = "list-directory-posix-types";
+	static constexpr char targetPath[] = "list-directory-posix-types/target";
+	static constexpr char linkPath[] = "list-directory-posix-types/link";
+	static constexpr char fifoPath[] = "list-directory-posix-types/fifo";
 	file::delete_file(linkPath);
-	file::delete_file(nativeNamePath.c_str());
 	file::delete_file(targetPath);
 	::unlink(fifoPath);
 	removeDirectory(directoryPath);
 
 	REQUIRE(createDirectory(directoryPath));
 	REQUIRE(createFileWithContents(targetPath, {}));
-	REQUIRE(createFileWithContents(nativeNamePath.c_str(), {}));
 	REQUIRE(::symlink("target", linkPath) == 0);
 	REQUIRE(::mkfifo(fifoPath, 0600) == 0);
 
 	const auto listed = list_directory(directoryPath);
 	REQUIRE(listed);
-	const native_string invalidUtf8Name{"\xFF", 1};
-	const directory_entry* const native = findEntry(*listed, invalidUtf8Name);
 	const directory_entry* const link = findEntry(*listed, "link");
 	const directory_entry* const fifo = findEntry(*listed, "fifo");
-	REQUIRE(native != nullptr);
-	CHECK(native->name == invalidUtf8Name);
 	REQUIRE(link != nullptr);
 	CHECK(link->attributes.is_link);
 	CHECK(link->attributes.kind == entry_kind::other);
@@ -192,11 +185,33 @@ TEST_CASE("POSIX directory enumeration preserves native name bytes and identifie
 	CHECK(fifo->attributes.kind == entry_kind::other);
 
 	REQUIRE(file::delete_file(linkPath));
-	REQUIRE(file::delete_file(nativeNamePath.c_str()));
 	REQUIRE(file::delete_file(targetPath));
 	REQUIRE(::unlink(fifoPath) == 0);
 	REQUIRE(removeDirectory(directoryPath));
 }
+
+#ifndef __APPLE__
+TEST_CASE("POSIX directory enumeration preserves native name bytes that are not valid UTF-8", "[fs][directory]")
+{
+	static constexpr char directoryPath[] = "list-directory-posix-native";
+	const std::string nativeNamePath = std::string{directoryPath} + "/\xFF";
+	file::delete_file(nativeNamePath.c_str());
+	removeDirectory(directoryPath);
+
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(nativeNamePath.c_str(), {}));
+	const auto listed = list_directory(directoryPath);
+	REQUIRE(listed);
+
+	const native_string invalidUtf8Name{"\xFF", 1};
+	const directory_entry* const native = findEntry(*listed, invalidUtf8Name);
+	REQUIRE(native != nullptr);
+	CHECK(native->name == invalidUtf8Name);
+
+	REQUIRE(file::delete_file(nativeNamePath.c_str()));
+	REQUIRE(removeDirectory(directoryPath));
+}
+#endif
 
 TEST_CASE("POSIX inaccessible-directory result is retained when permissions can be enforced", "[fs][directory]")
 {
