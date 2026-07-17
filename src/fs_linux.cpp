@@ -7,7 +7,9 @@
 #include <sys/stat.h> // utimensat, UTIME_OMIT
 #include <time.h>
 
+#include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -141,6 +143,20 @@ private:
 	return attributes;
 }
 
+[[nodiscard]] entry_identity identityFromStat(const struct stat& info) noexcept
+{
+	static_assert(sizeof(info.st_dev) <= sizeof(filesystem_identity));
+	static_assert(sizeof(info.st_ino) <= entry_identity{}.entry.size());
+
+	entry_identity identity;
+	identity.filesystem = static_cast<filesystem_identity>(info.st_dev);
+	using unsigned_inode = std::make_unsigned_t<decltype(info.st_ino)>;
+	const auto inode = static_cast<unsigned_inode>(info.st_ino);
+	for (size_t i = 0; i < sizeof(inode); ++i)
+		identity.entry[i] = static_cast<uint8_t>(inode >> (i * 8));
+	return identity;
+}
+
 [[nodiscard]] filesystem_result<entry_attributes> attributesFromDirectoryEntry(DIR* const directory, const dirent& entry)
 {
 	switch (entry.d_type)
@@ -206,6 +222,42 @@ filesystem_result<std::vector<directory_entry>> list_directory(const char* const
 	if (const auto closeError = directory.close()) [[unlikely]]
 		return std::unexpected{*closeError};
 	return entries;
+}
+
+filesystem_result<entry_metadata> get_entry_metadata(const char* const path, const link_behavior linkBehavior) noexcept
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	struct stat info;
+	int queryResult = 0;
+	switch (linkBehavior)
+	{
+	case link_behavior::follow:
+		queryResult = ::stat(path, &info);
+		break;
+	case link_behavior::do_not_follow:
+		queryResult = ::lstat(path, &info);
+		break;
+	default:
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+	}
+	if (queryResult != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	if (info.st_size < 0 || info.st_blocks < 0) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EOVERFLOW }};
+
+	const uint64_t allocatedBlocks = static_cast<uint64_t>(info.st_blocks);
+	if (allocatedBlocks > std::numeric_limits<uint64_t>::max() / 512) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EOVERFLOW }};
+
+	entry_metadata metadata;
+	metadata.attributes = attributesFromMode(info.st_mode);
+	metadata.logical_size = static_cast<uint64_t>(info.st_size);
+	metadata.allocated_size = allocatedBlocks * 512;
+	metadata.hard_link_count = static_cast<uint64_t>(info.st_nlink);
+	metadata.identity = identityFromStat(info);
+	return metadata;
 }
 
 } // namespace thin_io

@@ -172,14 +172,38 @@ private:
 	HANDLE _handle;
 };
 
-[[nodiscard]] entry_attributes attributesFromFindData(const WIN32_FIND_DATAW& data) noexcept
+class file_handle final {
+public:
+	explicit file_handle(const HANDLE handle) noexcept : _handle{handle} {}
+	~file_handle() noexcept
+	{
+		if (_handle != INVALID_HANDLE_VALUE)
+			::CloseHandle(_handle);
+	}
+
+	file_handle(const file_handle&) = delete;
+	file_handle& operator=(const file_handle&) = delete;
+
+	[[nodiscard]] std::optional<filesystem_error> close() noexcept
+	{
+		if (::CloseHandle(std::exchange(_handle, INVALID_HANDLE_VALUE)) != 0)
+			return {};
+
+		return capture_last_filesystem_error();
+	}
+
+private:
+	HANDLE _handle;
+};
+
+[[nodiscard]] entry_attributes attributesFromWindows(const DWORD nativeAttributes, const DWORD reparseTag) noexcept
 {
 	entry_attributes attributes;
-	attributes.kind = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? entry_kind::directory : entry_kind::regular_file;
-	attributes.is_link = (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-	attributes.sparse = (data.dwFileAttributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
-	attributes.compressed = (data.dwFileAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
-	attributes.reparse_tag = attributes.is_link ? data.dwReserved0 : 0;
+	attributes.kind = (nativeAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? entry_kind::directory : entry_kind::regular_file;
+	attributes.is_link = (nativeAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	attributes.sparse = (nativeAttributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
+	attributes.compressed = (nativeAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
+	attributes.reparse_tag = attributes.is_link ? reparseTag : 0;
 	return attributes;
 }
 
@@ -195,7 +219,7 @@ void appendDirectoryEntry(std::vector<directory_entry>& entries, const WIN32_FIN
 
 	directory_entry entry;
 	entry.name = data.cFileName;
-	entry.attributes = attributesFromFindData(data);
+	entry.attributes = attributesFromWindows(data.dwFileAttributes, data.dwReserved0);
 	if (entry.attributes.kind == entry_kind::regular_file && !entry.attributes.is_link)
 		entry.logical_size = (static_cast<uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
 	entries.push_back(std::move(entry));
@@ -248,6 +272,71 @@ template <class Character>
 	return entries;
 }
 
+template <class Character>
+[[nodiscard]] filesystem_result<entry_metadata> getEntryMetadata(const Character* path, const link_behavior linkBehavior) noexcept
+{
+	DWORD openFlags = FILE_FLAG_BACKUP_SEMANTICS;
+	switch (linkBehavior)
+	{
+	case link_behavior::follow:
+		break;
+	case link_behavior::do_not_follow:
+		openFlags |= FILE_FLAG_OPEN_REPARSE_POINT;
+		break;
+	default:
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
+	}
+
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, openFlags, nullptr);
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	file_handle handle{nativeHandle};
+
+	FILE_STANDARD_INFO standardInfo{};
+	if (::GetFileInformationByHandleEx(nativeHandle, FileStandardInfo, &standardInfo, sizeof(standardInfo)) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	if (standardInfo.EndOfFile.QuadPart < 0 || standardInfo.AllocationSize.QuadPart < 0) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_DATA }};
+
+	FILE_ATTRIBUTE_TAG_INFO attributeInfo{};
+	if (::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &attributeInfo, sizeof(attributeInfo)) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	entry_metadata metadata;
+	metadata.attributes = attributesFromWindows(attributeInfo.FileAttributes, attributeInfo.ReparseTag);
+	metadata.logical_size = static_cast<uint64_t>(standardInfo.EndOfFile.QuadPart);
+	metadata.allocated_size = static_cast<uint64_t>(standardInfo.AllocationSize.QuadPart);
+	metadata.hard_link_count = standardInfo.NumberOfLinks;
+	if (metadata.attributes.kind == entry_kind::regular_file && (metadata.attributes.sparse || metadata.attributes.compressed))
+	{
+		FILE_COMPRESSION_INFO compressionInfo{};
+		if (::GetFileInformationByHandleEx(nativeHandle, FileCompressionInfo, &compressionInfo, sizeof(compressionInfo)) == 0) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+		if (compressionInfo.CompressedFileSize.QuadPart < 0) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_DATA }};
+		metadata.allocated_size = static_cast<uint64_t>(compressionInfo.CompressedFileSize.QuadPart);
+	}
+
+	FILE_ID_INFO fileIdInfo{};
+	if (::GetFileInformationByHandleEx(nativeHandle, FileIdInfo, &fileIdInfo, sizeof(fileIdInfo)) != 0)
+	{
+		entry_identity identity;
+		identity.filesystem = fileIdInfo.VolumeSerialNumber;
+		for (size_t i = 0; i < identity.entry.size(); ++i)
+			identity.entry[i] = fileIdInfo.FileId.Identifier[i];
+		metadata.identity = identity;
+	}
+
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return metadata;
+}
+
 } // namespace
 
 filesystem_result<std::vector<directory_entry>> list_directory(const char* path)
@@ -258,6 +347,16 @@ filesystem_result<std::vector<directory_entry>> list_directory(const char* path)
 filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path)
 {
 	return listDirectory(path);
+}
+
+filesystem_result<entry_metadata> get_entry_metadata(const char* path, const link_behavior linkBehavior) noexcept
+{
+	return getEntryMetadata(path, linkBehavior);
+}
+
+filesystem_result<entry_metadata> get_entry_metadata(const wchar_t* path, const link_behavior linkBehavior) noexcept
+{
+	return getEntryMetadata(path, linkBehavior);
 }
 
 } // namespace thin_io

@@ -72,6 +72,7 @@ INCLUDEPATH += \
 
 SOURCES += \
 	test_directory_enumeration.cpp \
+	test_entry_metadata.cpp \
 	test_file.cpp \
 	test_file_links.cpp \
 	test_filesystem_error.cpp \

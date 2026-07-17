@@ -62,4 +62,11 @@ inline constexpr bool creation_time_settable =
 [[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path);
 #endif
 
+// Reads metadata for one filesystem entry. linkBehavior explicitly selects whether a symbolic link or reparse point
+// is inspected itself or resolved to its target.
+[[nodiscard]] filesystem_result<entry_metadata> get_entry_metadata(const char* path, link_behavior linkBehavior) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<entry_metadata> get_entry_metadata(const wchar_t* path, link_behavior linkBehavior) noexcept;
+#endif
+
 } // namespace thin_io

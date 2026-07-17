@@ -55,13 +55,13 @@ TEST_CASE("entry identity compares the filesystem and all 128 entry bits", "[fil
 	CHECK_FALSE(same == first);
 }
 
-TEST_CASE("detailed entry information represents unavailable identity separately", "[filesystem-types]")
+TEST_CASE("entry metadata represents unavailable identity separately", "[filesystem-types]")
 {
-	entry_info info;
-	CHECK_FALSE(info.identity);
-	CHECK(info.logical_size == 0);
-	CHECK(info.allocated_size == 0);
-	CHECK(info.hard_link_count == 0);
+	entry_metadata metadata;
+	CHECK_FALSE(metadata.identity);
+	CHECK(metadata.logical_size == 0);
+	CHECK(metadata.allocated_size == 0);
+	CHECK(metadata.hard_link_count == 0);
 }
 
 #ifndef _WIN32

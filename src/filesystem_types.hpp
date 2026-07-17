@@ -50,14 +50,14 @@ struct entry_identity {
 	[[nodiscard]] bool operator==(const entry_identity&) const noexcept = default;
 };
 
-struct entry_info {
+struct entry_metadata {
 	entry_attributes attributes;
 	uint64_t logical_size = 0;
-	uint64_t allocated_size = 0;
+	uint64_t allocated_size = 0; // Native allocation size, including sparse/compression accounting; st_blocks * 512 on POSIX.
 	uint64_t hard_link_count = 0;
-	std::optional<entry_identity> identity;
+	std::optional<entry_identity> identity; // Absent when a Windows filesystem does not expose FILE_ID_128.
 
-	[[nodiscard]] bool operator==(const entry_info&) const noexcept = default;
+	[[nodiscard]] bool operator==(const entry_metadata&) const noexcept = default;
 };
 
 enum class link_behavior : uint8_t {
