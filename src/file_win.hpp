@@ -22,6 +22,10 @@ public:
 			  open_disposition disposition,
 			  sys_cache_mode cacheMode,
 			  sharing_mode sharingMode) noexcept;
+	bool open(const wchar_t* path, access_mode accessMode,
+			  open_disposition disposition,
+			  sys_cache_mode cacheMode,
+			  sharing_mode sharingMode) noexcept;
 
 	// Does not check if the handle was open, returns false if it wasn't
 	bool close() noexcept;
@@ -52,6 +56,7 @@ public:
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
 
 	static bool delete_file(const char* filePath) noexcept;
+	static bool delete_file(const wchar_t* filePath) noexcept;
 
 	[[nodiscard]] static uint32_t error_code() noexcept;
 	[[nodiscard]] static std::string text_for_error(uint32_t ec) noexcept;
@@ -64,6 +69,14 @@ private:
 	};
 
 	bool do_unmap(const Mapping& mapping) noexcept;
+	template <class Character>
+	bool open_path(const Character* path, access_mode accessMode, open_disposition disposition,
+				   sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept;
+	bool open_prepared_path(const wchar_t* path, access_mode accessMode, open_disposition disposition,
+							sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept;
+	template <class Character>
+	static bool delete_path(const Character* filePath) noexcept;
+	static bool delete_prepared_path(const wchar_t* filePath) noexcept;
 
 private:
 	static constexpr auto invalid_handle = (HANDLE)(~size_t{0});

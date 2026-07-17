@@ -107,6 +107,12 @@ TEST_CASE("Existing Windows APIs publish path preparation errors", "[windows-pat
 	CHECK_FALSE(file::delete_file(invalidUtf8.c_str()));
 	CHECK(file::error_code() == ERROR_NO_UNICODE_TRANSLATION);
 
+	CHECK_FALSE(f.open(static_cast<const wchar_t*>(nullptr), file::access_mode::Read));
+	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
+
+	CHECK_FALSE(file::delete_file(static_cast<const wchar_t*>(nullptr)));
+	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
+
 	CHECK_FALSE(get_times(invalidUtf8.c_str()));
 	CHECK(file::error_code() == ERROR_NO_UNICODE_TRANSLATION);
 

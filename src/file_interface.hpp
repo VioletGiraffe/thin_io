@@ -28,6 +28,17 @@ public:
 		return open(path, accessMode, defaultOpenDisposition(accessMode), cacheMode, sharingMode);
 	}
 
+#ifdef _WIN32
+	inline bool open(const wchar_t* path,
+					 access_mode accessMode,
+					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+					 sharing_mode sharingMode = sharing_mode::ShareRead
+			) noexcept
+	{
+		return open(path, accessMode, defaultOpenDisposition(accessMode), cacheMode, sharingMode);
+	}
+#endif
+
 	inline bool open(const char* path,
 					 access_mode accessMode,
 					 open_disposition disposition,
@@ -37,6 +48,18 @@ public:
 	{
 		return _impl.open(path, accessMode, disposition, cacheMode, sharingMode);
 	}
+
+#ifdef _WIN32
+	inline bool open(const wchar_t* path,
+					 access_mode accessMode,
+					 open_disposition disposition,
+					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+					 sharing_mode sharingMode = sharing_mode::ShareRead
+			) noexcept
+	{
+		return _impl.open(path, accessMode, disposition, cacheMode, sharingMode);
+	}
+#endif
 
 	inline static file_interface open_file(const char* path,
 		access_mode accessMode,
@@ -49,6 +72,19 @@ public:
 		return f;
 	}
 
+#ifdef _WIN32
+	inline static file_interface open_file(const wchar_t* path,
+		access_mode accessMode,
+		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+		sharing_mode sharingMode = sharing_mode::ShareRead
+	) noexcept
+	{
+		file_interface<Impl> f;
+		f.open(path, accessMode, cacheMode, sharingMode);
+		return f;
+	}
+#endif
+
 	inline static file_interface open_file(const char* path,
 		access_mode accessMode,
 		open_disposition disposition,
@@ -60,6 +96,20 @@ public:
 		f.open(path, accessMode, disposition, cacheMode, sharingMode);
 		return f;
 	}
+
+#ifdef _WIN32
+	inline static file_interface open_file(const wchar_t* path,
+		access_mode accessMode,
+		open_disposition disposition,
+		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
+		sharing_mode sharingMode = sharing_mode::ShareRead
+	) noexcept
+	{
+		file_interface<Impl> f;
+		f.open(path, accessMode, disposition, cacheMode, sharingMode);
+		return f;
+	}
+#endif
 
 	[[nodiscard]] inline bool is_open() const noexcept {
 		return _impl.is_open();
@@ -149,6 +199,12 @@ public:
 	static bool delete_file(const char* filePath) noexcept {
 		return Impl::delete_file(filePath);
 	}
+
+#ifdef _WIN32
+	static bool delete_file(const wchar_t* filePath) noexcept {
+		return Impl::delete_file(filePath);
+	}
+#endif
 
 	// Beware, it's OS-specific!
 	[[nodiscard]] static inline auto error_code() noexcept {

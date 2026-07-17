@@ -60,8 +60,19 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 bool file_impl::open(const char* path, const access_mode accessMode, const open_disposition disposition,
 					 sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept
 {
-	static_assert(INVALID_HANDLE_VALUE == invalid_handle);
+	return open_path(path, accessMode, disposition, cacheMode, sharingMode);
+}
 
+bool file_impl::open(const wchar_t* path, const access_mode accessMode, const open_disposition disposition,
+					 sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept
+{
+	return open_path(path, accessMode, disposition, cacheMode, sharingMode);
+}
+
+template <class Character>
+bool file_impl::open_path(const Character* path, const access_mode accessMode, const open_disposition disposition,
+						  const sys_cache_mode cacheMode, const sharing_mode sharingMode) noexcept
+{
 	if (is_open() && !close())
 		return false;
 
@@ -78,12 +89,20 @@ bool file_impl::open(const char* path, const access_mode accessMode, const open_
 		return false;
 	}
 
+	return open_prepared_path(nativePath.c_str(), accessMode, disposition, cacheMode, sharingMode);
+}
+
+bool file_impl::open_prepared_path(const wchar_t* path, const access_mode accessMode, const open_disposition disposition,
+								   const sys_cache_mode cacheMode, const sharing_mode sharingMode) noexcept
+{
+	static_assert(INVALID_HANDLE_VALUE == invalid_handle);
+
 	const auto access = accessMask(accessMode);
 	const auto sharing = shareMask(accessMode, sharingMode);
 	const auto dispositionValue = creationDisposition(disposition);
 	const auto flagsAndAttrs = flags(cacheMode);
 
-	_h = ::CreateFileW(nativePath.c_str(),
+	_h = ::CreateFileW(path,
 					   access,
 					   sharing,
 					   nullptr, // Security attrs
@@ -338,7 +357,18 @@ std::string file_impl::text_for_error(uint32_t ec) noexcept
 		return std::string{ "Failed to format error code with FormatMessageA!" };
 }
 
-bool file_impl::delete_file(const char *filePath) noexcept
+bool file_impl::delete_file(const char* filePath) noexcept
+{
+	return delete_path(filePath);
+}
+
+bool file_impl::delete_file(const wchar_t* filePath) noexcept
+{
+	return delete_path(filePath);
+}
+
+template <class Character>
+bool file_impl::delete_path(const Character* filePath) noexcept
 {
 	windows_path_buffer nativePath{filePath};
 	if (!nativePath) [[unlikely]]
@@ -347,7 +377,12 @@ bool file_impl::delete_file(const char *filePath) noexcept
 		return false;
 	}
 
-	return ::DeleteFileW(nativePath.c_str()) != 0;
+	return delete_prepared_path(nativePath.c_str());
+}
+
+bool file_impl::delete_prepared_path(const wchar_t* filePath) noexcept
+{
+	return ::DeleteFileW(filePath) != 0;
 }
 
 bool file_impl::do_unmap(const Mapping& mapping) noexcept
