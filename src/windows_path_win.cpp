@@ -288,20 +288,34 @@ void windows_path_buffer::fail(const DWORD error) noexcept
 	_error = error == ERROR_SUCCESS ? ERROR_INVALID_NAME : error;
 }
 
-bool windows_path_buffer::append_directory_search_pattern() noexcept
+bool windows_path_buffer::append_directory_separator() noexcept
 {
 	if (!*this) [[unlikely]]
 		return false;
+	if (_path[_length - 1] == L'\\')
+		return true;
 
-	const size_t charactersToAppend = _path[_length - 1] == L'\\' ? 1 : 2;
-	if (_length > max_length - charactersToAppend) [[unlikely]]
+	if (_length == max_length) [[unlikely]]
 	{
 		fail(ERROR_FILENAME_EXCED_RANGE);
 		return false;
 	}
 
-	if (_path[_length - 1] != L'\\')
-		_path[_length++] = L'\\';
+	_path[_length++] = L'\\';
+	_path[_length] = L'\0';
+	return true;
+}
+
+bool windows_path_buffer::append_directory_search_pattern() noexcept
+{
+	if (!append_directory_separator()) [[unlikely]]
+		return false;
+	if (_length == max_length) [[unlikely]]
+	{
+		fail(ERROR_FILENAME_EXCED_RANGE);
+		return false;
+	}
+
 	_path[_length++] = L'*';
 	_path[_length] = L'\0';
 	return true;

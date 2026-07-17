@@ -60,6 +60,15 @@ struct entry_metadata {
 	[[nodiscard]] bool operator==(const entry_metadata&) const noexcept = default;
 };
 
+struct filesystem_space {
+	uint64_t capacity = 0; // Total capacity visible to the caller; Windows quotas may reduce it.
+	uint64_t free = 0; // Total free space, including space unavailable to the caller.
+	uint64_t available = 0; // Free space available to the caller after quotas and reservations.
+	std::optional<filesystem_identity> identity; // Absent when a Windows filesystem does not expose FILE_ID_128.
+
+	[[nodiscard]] bool operator==(const filesystem_space&) const noexcept = default;
+};
+
 enum class link_behavior : uint8_t {
 	follow,
 	do_not_follow

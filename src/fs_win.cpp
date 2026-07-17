@@ -212,6 +212,16 @@ private:
 	return name == L"." || name == L"..";
 }
 
+[[nodiscard]] bool isUncShareRoot(const std::wstring_view path) noexcept
+{
+	static constexpr std::wstring_view extendedUncPrefix = LR"(\\?\UNC\)";
+	if (!path.starts_with(extendedUncPrefix))
+		return false;
+
+	const size_t serverEnd = path.find(L'\\', extendedUncPrefix.size());
+	return serverEnd != std::wstring_view::npos && serverEnd + 1 < path.size() && path.find(L'\\', serverEnd + 1) == std::wstring_view::npos;
+}
+
 void appendDirectoryEntry(std::vector<directory_entry>& entries, const WIN32_FIND_DATAW& data)
 {
 	if (isDotEntry(data.cFileName))
@@ -272,6 +282,19 @@ template <class Character>
 	return entries;
 }
 
+[[nodiscard]] std::optional<entry_identity> identityForHandle(const HANDLE handle) noexcept
+{
+	FILE_ID_INFO fileIdInfo{};
+	if (::GetFileInformationByHandleEx(handle, FileIdInfo, &fileIdInfo, sizeof(fileIdInfo)) == 0)
+		return {};
+
+	entry_identity identity;
+	identity.filesystem = fileIdInfo.VolumeSerialNumber;
+	for (size_t i = 0; i < identity.entry.size(); ++i)
+		identity.entry[i] = fileIdInfo.FileId.Identifier[i];
+	return identity;
+}
+
 template <class Character>
 [[nodiscard]] filesystem_result<entry_metadata> getEntryMetadata(const Character* path, const link_behavior linkBehavior) noexcept
 {
@@ -322,19 +345,43 @@ template <class Character>
 		metadata.allocated_size = static_cast<uint64_t>(compressionInfo.CompressedFileSize.QuadPart);
 	}
 
-	FILE_ID_INFO fileIdInfo{};
-	if (::GetFileInformationByHandleEx(nativeHandle, FileIdInfo, &fileIdInfo, sizeof(fileIdInfo)) != 0)
-	{
-		entry_identity identity;
-		identity.filesystem = fileIdInfo.VolumeSerialNumber;
-		for (size_t i = 0; i < identity.entry.size(); ++i)
-			identity.entry[i] = fileIdInfo.FileId.Identifier[i];
-		metadata.identity = identity;
-	}
+	metadata.identity = identityForHandle(nativeHandle);
 
 	if (const auto closeError = handle.close()) [[unlikely]]
 		return std::unexpected{*closeError};
 	return metadata;
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<filesystem_space> getFilesystemSpace(const Character* directoryPath) noexcept
+{
+	windows_path_buffer nativePath{directoryPath};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	file_handle handle{nativeHandle};
+
+	if (isUncShareRoot(nativePath.c_str()) && !nativePath.append_directory_separator()) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+	ULARGE_INTEGER available{}, capacity{}, free{};
+	if (::GetDiskFreeSpaceExW(nativePath.c_str(), &available, &capacity, &free) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	filesystem_space space{
+		.capacity = capacity.QuadPart,
+		.free = free.QuadPart,
+		.available = available.QuadPart
+	};
+	if (const auto entryIdentity = identityForHandle(nativeHandle))
+		space.identity = entryIdentity->filesystem;
+
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return space;
 }
 
 } // namespace
@@ -357,6 +404,16 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* path, const lin
 filesystem_result<entry_metadata> get_entry_metadata(const wchar_t* path, const link_behavior linkBehavior) noexcept
 {
 	return getEntryMetadata(path, linkBehavior);
+}
+
+filesystem_result<filesystem_space> get_filesystem_space(const char* directoryPath) noexcept
+{
+	return getFilesystemSpace(directoryPath);
+}
+
+filesystem_result<filesystem_space> get_filesystem_space(const wchar_t* directoryPath) noexcept
+{
+	return getFilesystemSpace(directoryPath);
 }
 
 } // namespace thin_io

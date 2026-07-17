@@ -235,3 +235,14 @@ TEST_CASE("Windows path preparation appends a directory search pattern", "[windo
 		CHECK(prepared.error_code() == ERROR_FILENAME_EXCED_RANGE);
 	}
 }
+
+TEST_CASE("Windows path preparation appends a directory separator", "[windows-path]")
+{
+	windows_path_buffer directory{R"(C:\folder)"};
+	REQUIRE(directory.append_directory_separator());
+	CHECK(std::wstring_view{directory.c_str()} == LR"(\\?\C:\folder\)");
+
+	windows_path_buffer uncShare{R"(\\server\share)"};
+	REQUIRE(uncShare.append_directory_separator());
+	CHECK(std::wstring_view{uncShare.c_str()} == LR"(\\?\UNC\server\share\)");
+}

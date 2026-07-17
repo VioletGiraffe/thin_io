@@ -69,4 +69,10 @@ inline constexpr bool creation_time_settable =
 [[nodiscard]] filesystem_result<entry_metadata> get_entry_metadata(const wchar_t* path, link_behavior linkBehavior) noexcept;
 #endif
 
+// Reports space for the filesystem containing directoryPath. Symbolic links and reparse points are followed.
+[[nodiscard]] filesystem_result<filesystem_space> get_filesystem_space(const char* directoryPath) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<filesystem_space> get_filesystem_space(const wchar_t* directoryPath) noexcept;
+#endif
+
 } // namespace thin_io

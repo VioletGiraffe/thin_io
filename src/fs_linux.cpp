@@ -5,8 +5,10 @@
 #include <fcntl.h>    // AT_FDCWD
 #include <string.h>
 #include <sys/stat.h> // utimensat, UTIME_OMIT
+#include <sys/statvfs.h>
 #include <time.h>
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -258,6 +260,51 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* const path, con
 	metadata.hard_link_count = static_cast<uint64_t>(info.st_nlink);
 	metadata.identity = identityFromStat(info);
 	return metadata;
+}
+
+filesystem_result<filesystem_space> get_filesystem_space(const char* const directoryPath) noexcept
+{
+	if (directoryPath == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	DIR* const nativeDirectory = ::opendir(directoryPath);
+	if (nativeDirectory == nullptr) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	directory_handle directory{nativeDirectory};
+	const int descriptor = ::dirfd(nativeDirectory);
+	if (descriptor == -1) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	struct statvfs nativeSpace;
+	if (::fstatvfs(descriptor, &nativeSpace) != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	struct stat info;
+	if (::fstat(descriptor, &info) != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	static_assert(sizeof(nativeSpace.f_frsize) <= sizeof(uint64_t));
+	static_assert(sizeof(nativeSpace.f_blocks) <= sizeof(uint64_t));
+	static_assert(sizeof(nativeSpace.f_bfree) <= sizeof(uint64_t));
+	static_assert(sizeof(nativeSpace.f_bavail) <= sizeof(uint64_t));
+	const uint64_t fragmentSize = static_cast<uint64_t>(nativeSpace.f_frsize);
+	const uint64_t capacityBlocks = static_cast<uint64_t>(nativeSpace.f_blocks);
+	const uint64_t freeBlocks = static_cast<uint64_t>(nativeSpace.f_bfree);
+	const uint64_t availableBlocks = static_cast<uint64_t>(nativeSpace.f_bavail);
+	const uint64_t largestBlockCount = std::max({capacityBlocks, freeBlocks, availableBlocks});
+	if (fragmentSize == 0) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EIO }};
+	if (largestBlockCount > std::numeric_limits<uint64_t>::max() / fragmentSize) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EOVERFLOW }};
+
+	filesystem_space space{
+		.capacity = capacityBlocks * fragmentSize,
+		.free = freeBlocks * fragmentSize,
+		.available = availableBlocks * fragmentSize,
+		.identity = identityFromStat(info).filesystem
+	};
+	if (const auto closeError = directory.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return space;
 }
 
 } // namespace thin_io

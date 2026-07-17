@@ -76,6 +76,7 @@ SOURCES += \
 	test_file.cpp \
 	test_file_links.cpp \
 	test_filesystem_error.cpp \
+	test_filesystem_space.cpp \
 	test_filesystem_types.cpp \
 	test_fs.cpp \
 	tests_main.cpp
