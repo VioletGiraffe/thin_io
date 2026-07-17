@@ -12,6 +12,7 @@
 #include <winioctl.h>
 #else
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -67,6 +68,20 @@ static constexpr uint64_t sparseFileSize = 1024 * 1024 + 1;
 		&& ::WriteFile(handle, &finalByte, 1, &bytesWritten, nullptr) != 0 && bytesWritten == 1;
 	const bool closed = ::CloseHandle(handle) != 0;
 	return written && closed;
+#elif defined(__APPLE__)
+	const int descriptor = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (descriptor == -1)
+		return false;
+
+	const bool resized = ::ftruncate(descriptor, static_cast<off_t>(sparseFileSize)) == 0;
+	const char finalByte = 1;
+	const bool written = resized && ::pwrite(descriptor, &finalByte, 1, static_cast<off_t>(sparseFileSize - 1)) == 1;
+	fpunchhole_t hole{};
+	hole.fp_offset = 0;
+	hole.fp_length = static_cast<off_t>(sparseFileSize - 1);
+	const bool punched = written && ::fcntl(descriptor, F_PUNCHHOLE, &hole) != -1;
+	const bool closed = ::close(descriptor) == 0;
+	return punched && closed;
 #else
 	file created;
 	if (!created.open(path, file::access_mode::Write, file::open_disposition::CreateOrTruncate))
@@ -319,7 +334,7 @@ TEST_CASE("Windows metadata explicitly follows or inspects reparse points", "[fs
 	REQUIRE(file::delete_file(targetPath));
 }
 
-TEST_CASE("Windows metadata retains sharing failures", "[fs][metadata][windows]")
+TEST_CASE("Windows metadata tolerates a handle that denies data sharing", "[fs][metadata][windows]")
 {
 	static constexpr char filePath[] = "entry-metadata-sharing.file";
 	file::delete_file(filePath);
@@ -328,8 +343,8 @@ TEST_CASE("Windows metadata retains sharing failures", "[fs][metadata][windows]"
 	REQUIRE(exclusive != INVALID_HANDLE_VALUE);
 
 	const auto metadata = get_entry_metadata(filePath, link_behavior::do_not_follow);
-	REQUIRE_FALSE(metadata);
-	CHECK(metadata.error().native_code == ERROR_SHARING_VIOLATION);
+	REQUIRE(metadata);
+	CHECK(metadata->attributes.kind == entry_kind::regular_file);
 	REQUIRE(::CloseHandle(exclusive) != 0);
 	REQUIRE(file::delete_file(filePath));
 }
