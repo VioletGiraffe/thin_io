@@ -115,11 +115,15 @@ TEST_CASE("Existing Windows APIs publish path preparation errors", "[windows-pat
 
 	CHECK_FALSE(get_times(invalidUtf8.c_str()));
 	CHECK(file::error_code() == ERROR_NO_UNICODE_TRANSLATION);
+	CHECK_FALSE(get_times(static_cast<const wchar_t*>(nullptr)));
+	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
 
 	entry_times times;
 	times.last_write = timestamp{};
 	CHECK_FALSE(set_times(invalidUtf8.c_str(), times));
 	CHECK(file::error_code() == ERROR_NO_UNICODE_TRANSLATION);
+	CHECK_FALSE(set_times(static_cast<const wchar_t*>(nullptr), times));
+	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
 
 	std::string excessivePath = "C:\\";
 	excessivePath.append(windows_path_buffer::max_length - excessivePath.size(), 'a');

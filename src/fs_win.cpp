@@ -28,7 +28,30 @@ static constexpr int64_t maxRepresentableSeconds = (std::numeric_limits<int64_t>
 	return true;
 }
 
-bool set_times(const char* path, const entry_times& times) noexcept
+[[nodiscard]] static bool setPreparedTimes(const wchar_t* path, const entry_times& times, const FILETIME& creation,
+										   const FILETIME& lastAccess, const FILETIME& lastWrite) noexcept
+{
+	// FILE_FLAG_BACKUP_SEMANTICS is what makes a handle to a directory possible; it is a no-op for regular files.
+	const HANDLE h = ::CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+								 nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+	if (h == INVALID_HANDLE_VALUE) [[unlikely]]
+		return false;
+
+	const bool success = ::SetFileTime(h,
+		times.creation ? &creation : nullptr,
+		times.last_access ? &lastAccess : nullptr,
+		times.last_write ? &lastWrite : nullptr) != 0;
+
+	const DWORD error = success ? 0 : ::GetLastError(); // CloseHandle overwrites the thread's last error
+	::CloseHandle(h);
+	if (!success) [[unlikely]]
+		::SetLastError(error);
+
+	return success;
+}
+
+template <class Character>
+[[nodiscard]] static bool setTimesForPath(const Character* path, const entry_times& times) noexcept
 {
 	if (!times.creation && !times.last_access && !times.last_write)
 		return true; // Nothing to write, so don't even open the path - matching the POSIX implementation
@@ -49,23 +72,17 @@ bool set_times(const char* path, const entry_times& times) noexcept
 		return false;
 	}
 
-	// FILE_FLAG_BACKUP_SEMANTICS is what makes a handle to a directory possible; it is a no-op for regular files.
-	const HANDLE h = ::CreateFileW(nativePath.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-								   nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-	if (h == INVALID_HANDLE_VALUE) [[unlikely]]
-		return false;
+	return setPreparedTimes(nativePath.c_str(), times, creation, lastAccess, lastWrite);
+}
 
-	const bool success = ::SetFileTime(h,
-		times.creation ? &creation : nullptr,
-		times.last_access ? &lastAccess : nullptr,
-		times.last_write ? &lastWrite : nullptr) != 0;
+bool set_times(const char* path, const entry_times& times) noexcept
+{
+	return setTimesForPath(path, times);
+}
 
-	const DWORD error = success ? 0 : ::GetLastError(); // CloseHandle overwrites the thread's last error
-	::CloseHandle(h);
-	if (!success) [[unlikely]]
-		::SetLastError(error);
-
-	return success;
+bool set_times(const wchar_t* path, const entry_times& times) noexcept
+{
+	return setTimesForPath(path, times);
 }
 
 // A zero FILETIME is how Windows reports a timestamp the filesystem does not keep - FAT has no creation time, for one.
@@ -88,7 +105,22 @@ bool set_times(const char* path, const entry_times& times) noexcept
 	return timestamp{ .seconds = seconds, .nanoseconds = static_cast<uint32_t>(subSecondTicks) * 100 };
 }
 
-std::optional<entry_times> get_times(const char* path) noexcept
+[[nodiscard]] static std::optional<entry_times> getPreparedTimes(const wchar_t* path) noexcept
+{
+	// Reads the metadata without opening the path, so it works for directories and cannot perturb the access time
+	WIN32_FILE_ATTRIBUTE_DATA attributes;
+	if (::GetFileAttributesExW(path, GetFileExInfoStandard, &attributes) == 0) [[unlikely]]
+		return {};
+
+	entry_times times;
+	times.creation = fromFileTime(attributes.ftCreationTime);
+	times.last_access = fromFileTime(attributes.ftLastAccessTime);
+	times.last_write = fromFileTime(attributes.ftLastWriteTime);
+	return times;
+}
+
+template <class Character>
+[[nodiscard]] static std::optional<entry_times> getTimesForPath(const Character* path) noexcept
 {
 	windows_path_buffer nativePath{path};
 	if (!nativePath) [[unlikely]]
@@ -97,16 +129,17 @@ std::optional<entry_times> get_times(const char* path) noexcept
 		return {};
 	}
 
-	// Reads the metadata without opening the path, so it works for directories and cannot perturb the access time
-	WIN32_FILE_ATTRIBUTE_DATA attributes;
-	if (::GetFileAttributesExW(nativePath.c_str(), GetFileExInfoStandard, &attributes) == 0) [[unlikely]]
-		return {};
+	return getPreparedTimes(nativePath.c_str());
+}
 
-	entry_times times;
-	times.creation = fromFileTime(attributes.ftCreationTime);
-	times.last_access = fromFileTime(attributes.ftLastAccessTime);
-	times.last_write = fromFileTime(attributes.ftLastWriteTime);
-	return times;
+std::optional<entry_times> get_times(const char* path) noexcept
+{
+	return getTimesForPath(path);
+}
+
+std::optional<entry_times> get_times(const wchar_t* path) noexcept
+{
+	return getTimesForPath(path);
 }
 
 } // namespace thin_io

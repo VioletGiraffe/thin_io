@@ -14,6 +14,8 @@ using namespace thin_io;
 
 static bool createDirectory(const char* path) { return ::CreateDirectoryA(path, nullptr) != 0; }
 static bool removeDirectory(const char* path) { return ::RemoveDirectoryA(path) != 0; }
+static bool createDirectory(const wchar_t* path) { return ::CreateDirectoryW(path, nullptr) != 0; }
+static bool removeDirectory(const wchar_t* path) { return ::RemoveDirectoryW(path) != 0; }
 
 // Deliberately bypasses set_times(), so that get_times() can be checked against a value the platform itself produced
 static bool setLastWriteNatively(const char* path, const SYSTEMTIME& utc)
@@ -54,7 +56,8 @@ static bool setLastWriteNatively(const char* path, const int64_t unixSeconds)
 
 #endif
 
-static bool createEmptyFile(const char* path)
+template <class Character>
+static bool createEmptyFile(const Character* path)
 {
 	file f;
 	return f.open(path, file::access_mode::Write, file::open_disposition::CreateOrTruncate) && f.close();
@@ -139,7 +142,8 @@ TEST_CASE("get_times fails for a path that does not exist", "[fs]")
 #endif
 }
 
-[[nodiscard]] static entry_times readTimes(const char* path)
+template <class Character>
+[[nodiscard]] static entry_times readTimes(const Character* path)
 {
 	const auto times = get_times(path);
 	REQUIRE(times);
@@ -197,6 +201,32 @@ TEST_CASE("set_times sets the timestamps of a directory", "[fs]")
 
 	REQUIRE(removeDirectory(testDirectoryPath));
 }
+
+#ifdef _WIN32
+TEST_CASE("native-wide timestamp APIs round-trip a Unicode file and directory", "[fs][windows]")
+{
+	static constexpr wchar_t testFilePath[] = L"set-times-\u0444\u0430\u0439\u043B.file";
+	static constexpr wchar_t testDirectoryPath[] = L"set-times-\u043A\u0430\u0442\u0430\u043B\u043E\u0433";
+	file::delete_file(testFilePath);
+	removeDirectory(testDirectoryPath);
+	REQUIRE(createEmptyFile(testFilePath));
+	REQUIRE(createDirectory(testDirectoryPath));
+
+	const wchar_t* const paths[] { testFilePath, testDirectoryPath };
+	for (const wchar_t* path : paths)
+	{
+		REQUIRE(set_times(path, allTestTimes()));
+
+		const entry_times actual = readTimes(path);
+		CHECK(actual.creation == testCreation);
+		CHECK(actual.last_access == testLastAccess);
+		CHECK(actual.last_write == testLastWrite);
+	}
+
+	REQUIRE(file::delete_file(testFilePath));
+	REQUIRE(removeDirectory(testDirectoryPath));
+}
+#endif
 
 TEST_CASE("set_times leaves omitted timestamps untouched", "[fs]")
 {

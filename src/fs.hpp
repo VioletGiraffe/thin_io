@@ -35,6 +35,9 @@ inline constexpr bool creation_time_settable =
 // without touching the path at all, and so does requesting only a creation time where that isn't settable. Returns
 // false on failure, in which case file::error_code() and file::text_for_last_error() report the native reason.
 [[nodiscard]] bool set_times(const char* path, const entry_times& times) noexcept;
+#ifdef _WIN32
+[[nodiscard]] bool set_times(const wchar_t* path, const entry_times& times) noexcept;
+#endif
 
 // Reports the timestamps of an existing file or directory, following links. The access and modification times are
 // always reported; the creation time is reported on Windows and Darwin, and on Linux only where the kernel and the
@@ -43,5 +46,8 @@ inline constexpr bool creation_time_settable =
 // result straight back into set_times() transfers whatever the source has and the destination will accept.
 // Returns nullopt on failure, in which case file::error_code() and file::text_for_last_error() report the reason.
 [[nodiscard]] std::optional<entry_times> get_times(const char* path) noexcept;
+#ifdef _WIN32
+[[nodiscard]] std::optional<entry_times> get_times(const wchar_t* path) noexcept;
+#endif
 
 } // namespace thin_io
