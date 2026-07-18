@@ -15,6 +15,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef __linux__
+#include <sys/sysmacros.h>
+#endif
+
 #ifdef __APPLE__
 #include <sys/attr.h> // setattrlist, ATTR_CMN_CRTIME
 #include <unistd.h>
@@ -145,18 +149,24 @@ private:
 	return attributes;
 }
 
-[[nodiscard]] entry_identity identityFromStat(const struct stat& info) noexcept
+template<class Inode>
+[[nodiscard]] entry_identity entryIdentity(const filesystem_identity filesystem, const Inode nativeInode) noexcept
 {
-	static_assert(sizeof(info.st_dev) <= sizeof(filesystem_identity));
-	static_assert(sizeof(info.st_ino) <= entry_identity{}.entry.size());
+	static_assert(sizeof(Inode) <= entry_identity{}.entry.size());
 
 	entry_identity identity;
-	identity.filesystem = static_cast<filesystem_identity>(info.st_dev);
-	using unsigned_inode = std::make_unsigned_t<decltype(info.st_ino)>;
-	const auto inode = static_cast<unsigned_inode>(info.st_ino);
+	identity.filesystem = filesystem;
+	using unsigned_inode = std::make_unsigned_t<Inode>;
+	const auto inode = static_cast<unsigned_inode>(nativeInode);
 	for (size_t i = 0; i < sizeof(inode); ++i)
 		identity.entry[i] = static_cast<uint8_t>(inode >> (i * 8));
 	return identity;
+}
+
+[[nodiscard]] entry_identity identityFromStat(const struct stat& info) noexcept
+{
+	static_assert(sizeof(info.st_dev) <= sizeof(filesystem_identity));
+	return entryIdentity(static_cast<filesystem_identity>(info.st_dev), info.st_ino);
 }
 
 [[nodiscard]] filesystem_result<entry_attributes> attributesFromDirectoryEntry(DIR* const directory, const dirent& entry)
@@ -231,6 +241,47 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* const path, con
 	if (path == nullptr) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
 
+#if defined(__linux__) && defined(STATX_MNT_ID)
+	int statxFlags = 0;
+	switch (linkBehavior)
+	{
+	case link_behavior::follow:
+		break;
+	case link_behavior::do_not_follow:
+		statxFlags = AT_SYMLINK_NOFOLLOW;
+		break;
+	default:
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+	}
+
+	struct statx extendedInfo{};
+	constexpr unsigned int requestedFields = STATX_BASIC_STATS | STATX_MNT_ID;
+	if (::statx(AT_FDCWD, path, statxFlags, requestedFields, &extendedInfo) == 0)
+	{
+		if ((extendedInfo.stx_mask & STATX_BASIC_STATS) != STATX_BASIC_STATS) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = EIO }};
+		if (extendedInfo.stx_blocks > std::numeric_limits<uint64_t>::max() / 512) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = EOVERFLOW }};
+
+		static_assert(sizeof(dev_t) <= sizeof(filesystem_identity));
+		const dev_t device = ::makedev(extendedInfo.stx_dev_major, extendedInfo.stx_dev_minor);
+		entry_metadata metadata;
+		metadata.attributes = attributesFromMode(static_cast<mode_t>(extendedInfo.stx_mode));
+		metadata.logical_size = extendedInfo.stx_size;
+		metadata.allocated_size = extendedInfo.stx_blocks * 512;
+		metadata.hard_link_count = extendedInfo.stx_nlink;
+		metadata.identity = entryIdentity(static_cast<filesystem_identity>(device), extendedInfo.stx_ino);
+		metadata.mount_id = metadata.identity->filesystem;
+		if ((extendedInfo.stx_mask & STATX_MNT_ID) != 0)
+			metadata.mount_id = static_cast<mount_identity>(extendedInfo.stx_mnt_id);
+		return metadata;
+	}
+
+	const filesystem_error statxError = capture_last_filesystem_error();
+	if (statxError.native_code != ENOSYS && statxError.native_code != EINVAL)
+		return std::unexpected{statxError};
+#endif
+
 	struct stat info;
 	int queryResult = 0;
 	switch (linkBehavior)
@@ -259,6 +310,7 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* const path, con
 	metadata.allocated_size = allocatedBlocks * 512;
 	metadata.hard_link_count = static_cast<uint64_t>(info.st_nlink);
 	metadata.identity = identityFromStat(info);
+	metadata.mount_id = metadata.identity->filesystem;
 	return metadata;
 }
 

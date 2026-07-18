@@ -93,6 +93,26 @@ static constexpr uint64_t sparseFileSize = 1024 * 1024 + 1;
 #endif
 }
 
+#ifdef _WIN32
+[[nodiscard]] bool createCompressedFile(const char* const path)
+{
+	const HANDLE handle = ::CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (handle == INVALID_HANDLE_VALUE)
+		return false;
+
+	USHORT compressionFormat = COMPRESSION_FORMAT_DEFAULT;
+	DWORD ignored = 0;
+	const bool compressed = ::DeviceIoControl(handle, FSCTL_SET_COMPRESSION,
+		&compressionFormat, static_cast<DWORD>(sizeof(compressionFormat)), nullptr, 0, &ignored, nullptr) != 0;
+	std::vector<uint8_t> contents(static_cast<size_t>(sparseFileSize), 0);
+	DWORD bytesWritten = 0;
+	const bool written = compressed && ::WriteFile(handle, contents.data(), static_cast<DWORD>(contents.size()), &bytesWritten, nullptr) != 0
+		&& bytesWritten == contents.size();
+	const bool closed = ::CloseHandle(handle) != 0;
+	return written && closed;
+}
+#endif
+
 [[nodiscard]] bool createDenseFile(const char* const path)
 {
 	std::vector<uint8_t> contents(static_cast<size_t>(sparseFileSize));
@@ -141,6 +161,11 @@ TEST_CASE("get_entry_metadata reports regular files, empty files, and directorie
 	REQUIRE(directory);
 	CHECK(directory->attributes.kind == entry_kind::directory);
 	CHECK_FALSE(directory->attributes.is_link);
+#ifndef _WIN32
+	REQUIRE(regular->mount_id);
+	REQUIRE(directory->mount_id);
+	CHECK(regular->mount_id == directory->mount_id);
+#endif
 
 	REQUIRE(file::delete_file(emptyFilePath));
 	REQUIRE(file::delete_file(filePath));
@@ -204,6 +229,28 @@ TEST_CASE("get_entry_metadata distinguishes sparse allocation from logical size"
 	REQUIRE(file::delete_file(sparsePath));
 	REQUIRE(file::delete_file(densePath));
 }
+
+#ifdef _WIN32
+TEST_CASE("Windows metadata reports compressed allocation", "[fs][metadata][windows][compression]")
+{
+	static constexpr char compressedPath[] = "entry-metadata-compressed.file";
+	file::delete_file(compressedPath);
+	if (!createCompressedFile(compressedPath))
+	{
+		WARN("The test filesystem does not support creating compressed files");
+		file::delete_file(compressedPath);
+		return;
+	}
+
+	const auto compressed = get_entry_metadata(compressedPath, link_behavior::do_not_follow);
+	REQUIRE(compressed);
+	CHECK(compressed->attributes.compressed);
+	CHECK(compressed->logical_size == sparseFileSize);
+	CHECK(compressed->allocated_size < compressed->logical_size);
+
+	REQUIRE(file::delete_file(compressedPath));
+}
+#endif
 
 TEST_CASE("get_entry_metadata fails after an enumerated entry is deleted", "[fs][metadata][directory]")
 {

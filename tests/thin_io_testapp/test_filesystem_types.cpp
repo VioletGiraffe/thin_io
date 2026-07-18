@@ -59,6 +59,7 @@ TEST_CASE("entry metadata represents unavailable identity separately", "[filesys
 {
 	entry_metadata metadata;
 	CHECK_FALSE(metadata.identity);
+	CHECK_FALSE(metadata.mount_id);
 	CHECK(metadata.logical_size == 0);
 	CHECK(metadata.allocated_size == 0);
 	CHECK(metadata.hard_link_count == 0);

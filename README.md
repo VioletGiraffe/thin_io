@@ -87,7 +87,10 @@ reliably on every platform.
 
 `get_entry_metadata()` requires an explicit `link_behavior`: `follow` describes the target, while `do_not_follow`
 describes the symbolic link or reparse entry itself. The result includes logical size, allocated size, hard-link
-count, attributes, and an optional stable identity.
+count, attributes, an optional stable entry identity, and an optional scan-local mount identity. Linux obtains the
+mount identity from `statx`, which distinguishes bind mounts even though they retain the target's device ID. Other
+platforms use the available filesystem or volume identity. Mount identity is for traversal boundaries within the
+current mount namespace; it is not a persistent cross-scan identifier.
 
 Allocated size follows the native accounting definition:
 

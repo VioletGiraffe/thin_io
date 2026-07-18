@@ -41,6 +41,7 @@ struct directory_entry {
 };
 
 using filesystem_identity = uint64_t;
+using mount_identity = uint64_t;
 
 // Windows uses the complete FILE_ID_128 value; POSIX stores the inode in the same zero-padded representation.
 struct entry_identity {
@@ -56,6 +57,9 @@ struct entry_metadata {
 	uint64_t allocated_size = 0; // Native allocation size, including sparse/compression accounting; st_blocks * 512 on POSIX.
 	uint64_t hard_link_count = 0;
 	std::optional<entry_identity> identity; // Absent when a Windows filesystem does not expose FILE_ID_128.
+	// Identifies a mounted view during traversal. Linux uses statx mount IDs so bind mounts differ despite sharing st_dev;
+	// other platforms use the available filesystem/volume identity. Do not persist this as a cross-scan identity.
+	std::optional<mount_identity> mount_id;
 
 	[[nodiscard]] bool operator==(const entry_metadata&) const noexcept = default;
 };

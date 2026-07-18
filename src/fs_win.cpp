@@ -346,6 +346,8 @@ template <class Character>
 	}
 
 	metadata.identity = identityForHandle(nativeHandle);
+	if (metadata.identity)
+		metadata.mount_id = metadata.identity->filesystem;
 
 	if (const auto closeError = handle.close()) [[unlikely]]
 		return std::unexpected{*closeError};
