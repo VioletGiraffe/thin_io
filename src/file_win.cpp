@@ -276,6 +276,17 @@ void* file_impl::mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) n
 		return nullptr;
 	}
 
+	// The range check prevents CreateFileMapping from silently growing the file for a writable mapping past EOF,
+	// and a zero total size from meaning "map the whole file".
+	const auto fileSize = size();
+	if (!fileSize) [[unlikely]]
+		return nullptr; // GetFileSizeEx has set the error code
+	if (length == 0 || offset > *fileSize || length > *fileSize - offset) [[unlikely]]
+	{
+		::SetLastError(ERROR_INVALID_PARAMETER);
+		return nullptr;
+	}
+
 	uint64_t actualOffset = offset;
 	if (offset != 0)
 	{

@@ -185,6 +185,9 @@ public:
 		return _impl.fdatasync();
 	}
 
+	// Maps [offset, offset + length) of the file; the range must be non-empty and lie within the current file size
+	// (resize() first to map a larger range). offset does not have to be aligned. Returns nullptr on failure.
+	// If another process truncates the file while mapped, accessing the truncated-away pages faults on every platform.
 	[[nodiscard]] inline void* mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept {
 		return _impl.mmap(mode, offset, length);
 	}

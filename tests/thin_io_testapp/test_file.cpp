@@ -707,6 +707,30 @@ TEST_CASE("mmap - offset past the first page", "[file]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("mmap - the requested range must be non-empty and within the file", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	static constexpr auto size = sizeof(testString);
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, testString, size));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
+
+	CHECK(f.mmap(file::mmap_access_mode::ReadWrite, 0, 0) == nullptr);
+	CHECK(f.mmap(file::mmap_access_mode::ReadWrite, 0, size + 1) == nullptr);
+	CHECK(f.mmap(file::mmap_access_mode::ReadWrite, size, 1) == nullptr);
+	CHECK(f.mmap(file::mmap_access_mode::ReadOnly, size + 100, 1) == nullptr);
+	REQUIRE(f.size() == size); // No failed request may have grown the file
+
+	auto* addr = f.mmap(file::mmap_access_mode::ReadOnly, 0, size); // The full valid range still maps
+	REQUIRE(addr);
+	REQUIRE(f.unmap(addr));
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("mmap - mappings survive moving the file object", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";

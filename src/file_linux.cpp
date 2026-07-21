@@ -248,6 +248,16 @@ void* file_impl::mmap(mmap_access_mode mode, const uint64_t offset, const uint64
 {
 	assert(is_open()); // Not required for correctness here (::mmap fails on a bad descriptor), but loud in debug like the Windows version
 
+	// The range check turns what would be a deferred SIGBUS on first access past EOF into an immediate failure
+	const auto fileSize = size();
+	if (!fileSize) [[unlikely]]
+		return nullptr; // fstat has set errno
+	if (length == 0 || offset > *fileSize || length > *fileSize - offset) [[unlikely]]
+	{
+		errno = EINVAL;
+		return nullptr;
+	}
+
 	// Offset must be a multiple of page size!
 	auto actualOffset = offset;
 	if (offset != 0) [[unlikely]]
