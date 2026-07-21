@@ -127,6 +127,46 @@ TEST_CASE("get_times reports a newly created file and directory", "[fs]")
 	REQUIRE(removeDirectory(testDirectoryPath));
 }
 
+TEST_CASE("get_times follows a directory link to its target", "[fs][link]")
+{
+	static constexpr char targetPath[] = "get-times-link-target.dir";
+	static constexpr char linkPath[] = "get-times-link.dir";
+#ifdef _WIN32
+	removeDirectory(linkPath); // A directory symbolic link is a directory entry
+#else
+	::unlink(linkPath);
+#endif
+	removeDirectory(targetPath);
+
+	REQUIRE(createDirectory(targetPath));
+	entry_times targetTimes;
+	targetTimes.last_write = timestamp{ .seconds = 1'234'567'890 };
+	REQUIRE(set_times(targetPath, targetTimes));
+
+#ifdef _WIN32
+	static constexpr DWORD directoryUnprivilegedCreate = 0x1 /*SYMBOLIC_LINK_FLAG_DIRECTORY*/ | 0x2 /*SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE*/;
+	if (::CreateSymbolicLinkA(linkPath, targetPath, directoryUnprivilegedCreate) == 0)
+	{
+		WARN("Symbolic-link creation is unavailable; link-following times assertion skipped");
+		REQUIRE(removeDirectory(targetPath));
+		return;
+	}
+#else
+	REQUIRE(::symlink(targetPath, linkPath) == 0);
+#endif
+
+	const auto times = get_times(linkPath);
+	REQUIRE(times);
+	CHECK(times->last_write == timestamp{ .seconds = 1'234'567'890 }); // The target's time, not the link entry's own
+
+#ifdef _WIN32
+	REQUIRE(removeDirectory(linkPath));
+#else
+	REQUIRE(::unlink(linkPath) == 0);
+#endif
+	REQUIRE(removeDirectory(targetPath));
+}
+
 TEST_CASE("get_times fails for a path that does not exist", "[fs]")
 {
 	static constexpr char missingPath[] = "get-times-no-such-entry.file";

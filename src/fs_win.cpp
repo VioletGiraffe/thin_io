@@ -116,6 +116,32 @@ bool set_times(const wchar_t* path, const entry_times& times) noexcept
 	if (::GetFileAttributesExW(path, GetFileExInfoStandard, &attributes) == 0) [[unlikely]]
 		return {};
 
+	if ((attributes.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+	{
+		// GetFileAttributesEx reports the reparse point itself, but the contract is to follow links, so read the
+		// target through a following handle. FILE_READ_ATTRIBUTES access does not perturb the target's access time.
+		const HANDLE h = ::CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+									  nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (h == INVALID_HANDLE_VALUE) [[unlikely]]
+			return {};
+
+		BY_HANDLE_FILE_INFORMATION info;
+		const bool success = ::GetFileInformationByHandle(h, &info) != 0;
+		const DWORD error = success ? 0 : ::GetLastError(); // CloseHandle overwrites the thread's last error
+		::CloseHandle(h);
+		if (!success) [[unlikely]]
+		{
+			::SetLastError(error);
+			return {};
+		}
+
+		entry_times times;
+		times.creation = fromFileTime(info.ftCreationTime);
+		times.last_access = fromFileTime(info.ftLastAccessTime);
+		times.last_write = fromFileTime(info.ftLastWriteTime);
+		return times;
+	}
+
 	entry_times times;
 	times.creation = fromFileTime(attributes.ftCreationTime);
 	times.last_access = fromFileTime(attributes.ftLastAccessTime);
