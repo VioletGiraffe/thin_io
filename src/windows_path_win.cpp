@@ -308,7 +308,12 @@ bool windows_path_buffer::append_directory_separator() noexcept
 
 bool windows_path_buffer::append_directory_search_pattern() noexcept
 {
-	if (!append_directory_separator()) [[unlikely]]
+	if (!*this) [[unlikely]]
+		return false;
+
+	// A trailing ':' is a bare drive-relative path such as "C:"; a separator would redirect it to the drive root,
+	// so the pattern must stay relative: "C:*".
+	if (_path[_length - 1] != L':' && !append_directory_separator()) [[unlikely]]
 		return false;
 	if (_length == max_length) [[unlikely]]
 	{

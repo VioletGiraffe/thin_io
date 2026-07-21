@@ -129,13 +129,12 @@ bool file_impl::close() noexcept
 		do_unmap(mapping);
 	_memoryMappings.clear();
 
-	if (is_open() && ::CloseHandle(_h) != 0)
-	{
-		_h = invalid_handle;
-		return true;
-	}
-	else
+	if (!is_open())
 		return false;
+
+	const HANDLE h = _h;
+	_h = invalid_handle; // A failed close is not safely retryable because the handle value may already have been reused.
+	return ::CloseHandle(h) != 0;
 }
 
 std::optional<uint64_t> file_impl::read(void *dest, uint64_t size) noexcept

@@ -21,6 +21,7 @@
 #define lseek64 lseek
 #define fstat64 fstat
 #define stat64 stat
+#define mmap64 mmap
 using off64_t = off_t;
 #endif
 
@@ -259,7 +260,7 @@ void* file_impl::mmap(mmap_access_mode mode, const uint64_t offset, const uint64
 
 	const auto offsetDiff = offset - actualOffset;
 	const int protectFlag = mode == mmap_access_mode::ReadOnly ? PROT_READ : (PROT_READ | PROT_WRITE);
-	void* addr = ::mmap(nullptr, length + offsetDiff, protectFlag, MAP_SHARED, _fd, static_cast<off_t>(actualOffset));
+	void* addr = ::mmap64(nullptr, length + offsetDiff, protectFlag, MAP_SHARED, _fd, static_cast<off64_t>(actualOffset));
 	if (addr == MAP_FAILED) [[unlikely]]
 		return nullptr;
 

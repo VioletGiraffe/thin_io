@@ -132,7 +132,7 @@ public:
 	}
 
 	// !!!
-	// NOTE: Win32: the position of the file will be altered; Linux / POSIX: the position is NOT altered
+	// NOTE: Win32: pread / pwrite alter the file position; Linux / POSIX: the position is NOT altered
 	// !!!
 	inline std::optional<uint64_t> pread(void* dest, uint64_t size, uint64_t pos) noexcept {
 		return _impl.pread(dest, size, pos);
@@ -183,7 +183,6 @@ public:
 		return _impl.unmap(mapAddress);
 	}
 
-	// Negative value means an error querying the size
 	[[nodiscard]] inline std::optional<uint64_t> size() const noexcept {
 		return _impl.size();
 	}

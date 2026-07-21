@@ -225,6 +225,13 @@ TEST_CASE("Windows path preparation appends a directory search pattern", "[windo
 		CHECK(std::wstring_view{prepared.c_str()} == LR"(folder\*)");
 	}
 
+	SECTION("bare drive-relative path stays relative")
+	{
+		windows_path_buffer prepared{"C:"};
+		REQUIRE(prepared.append_directory_search_pattern());
+		CHECK(std::wstring_view{prepared.c_str()} == L"C:*");
+	}
+
 	SECTION("path at the Win32 limit")
 	{
 		std::wstring maximumPath = LR"(\\?\)";

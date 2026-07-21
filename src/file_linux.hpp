@@ -27,7 +27,7 @@ public:
 	std::optional<uint64_t> read(void* dest, uint64_t size) noexcept;
 	std::optional<uint64_t> write(const void* src, uint64_t size) noexcept;
 
-	// Note: the position of the file will be altered!
+	// Note: the file position is NOT altered (unlike on Win32)
 	std::optional<uint64_t> pread(void* dest, uint64_t size, uint64_t pos) noexcept;
 	std::optional<uint64_t> pwrite(const void* src, uint64_t size, uint64_t pos) noexcept;
 

@@ -228,7 +228,7 @@ filesystem_result<std::vector<directory_entry>> list_directory(const char* const
 		auto attributes = attributesFromDirectoryEntry(nativeDirectory, *nativeEntry);
 		if (!attributes) [[unlikely]]
 			return std::unexpected{attributes.error()};
-		entries.push_back(directory_entry{ .name = nativeEntry->d_name, .attributes = *attributes });
+		entries.push_back(directory_entry{ .name = nativeEntry->d_name, .attributes = *attributes, .logical_size = std::nullopt });
 	}
 
 	if (const auto closeError = directory.close()) [[unlikely]]
