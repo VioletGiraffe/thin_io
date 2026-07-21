@@ -7,6 +7,9 @@
 
 using namespace thin_io;
 
+static_assert((file::sharing_mode::ShareRead | file::sharing_mode::ShareWrite | file::sharing_mode::ShareDelete)
+			  == static_cast<file::sharing_mode>(1 | 2 | 4));
+
 #ifdef _WIN32
 #define REQUIRE_LINUX(...) (void)0
 #define REQUIRE_WIN(...) REQUIRE(__VA_ARGS__)

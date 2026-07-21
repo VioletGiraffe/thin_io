@@ -3,7 +3,6 @@
 #include "windows_path_win.hpp"
 
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::access_mode);
-ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::sharing_mode);
 
 #include <assert.h>
 #include <string.h> // memset
@@ -46,10 +45,10 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 
 [[nodiscard]] inline constexpr DWORD shareMask(file_constants::access_mode accessMode, file_constants::sharing_mode sharing)
 {
-	if (accessMode == file_constants::access_mode::Read)
-		return sharing | file_constants::sharing_mode::ShareWrite; // Add permission to read files open for writing with SHARE_READ only
-	else
-		return static_cast<DWORD>(sharing); // Otherwise no change to permissions
+	if (sharing == file_constants::sharing_mode::Default)
+		return accessMode == file_constants::access_mode::Read ? (FILE_SHARE_READ | FILE_SHARE_WRITE) : FILE_SHARE_READ;
+
+	return static_cast<DWORD>(sharing);
 }
 
 [[nodiscard]] inline constexpr DWORD flags(file_constants::sys_cache_mode cacheMode)

@@ -153,6 +153,29 @@ TEST_CASE("Windows UTF-8 and native-wide file APIs address the same Unicode file
 	REQUIRE(file::delete_file(charPath));
 }
 
+TEST_CASE("Windows explicit sharing mode is honored exactly", "[file][windows]")
+{
+	static constexpr const char testFilePath[] = "thin_io_sharing.tmp";
+	file::delete_file(testFilePath);
+
+	file writer;
+	REQUIRE(writer.open(testFilePath, file::access_mode::Write)); // sharing_mode::Default: concurrent readers allowed
+
+	file reader;
+	CHECK_FALSE(reader.open(testFilePath, file::access_mode::Read, file::sys_cache_mode::CachingEnabled, file::sharing_mode::NoSharing));
+	CHECK(file::error_code() == ERROR_SHARING_VIOLATION);
+
+	CHECK(reader.open(testFilePath, file::access_mode::Read, file::sys_cache_mode::CachingEnabled,
+					  file::sharing_mode::ShareRead | file::sharing_mode::ShareWrite));
+	REQUIRE(reader.close());
+
+	CHECK(reader.open(testFilePath, file::access_mode::Read)); // sharing_mode::Default tolerates the concurrent writer
+	REQUIRE(reader.close());
+
+	REQUIRE(writer.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("Windows file APIs support long paths independently of process policy", "[file][windows]")
 {
 	std::array<wchar_t, windows_path_buffer::max_length + 1> currentDirectory{};

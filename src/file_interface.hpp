@@ -2,6 +2,7 @@
 #include <optional>
 #include <stdint.h>
 #include <string>
+#include <utility>
 
 namespace thin_io {
 
@@ -11,10 +12,18 @@ struct file_constants {
 	// write access. Existing contents are preserved by OpenExisting, OpenOrCreate, and a failed CreateNew.
 	enum class open_disposition {OpenExisting, OpenOrCreate, CreateNew, CreateOrTruncate};
 	enum class sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
+	// Sharing is enforced only on Windows; POSIX opens ignore it. Default resolves per access mode: writable opens
+	// allow concurrent readers, and read-only opens additionally tolerate concurrent writers, so that a file already
+	// open for writing elsewhere can still be read. An explicit value is passed to the OS exactly as given.
 	// ShareExec equals ShareRead: NT's share-access check classifies execute access as read, so they cannot differ.
-	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = ShareRead};
+	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = ShareRead, Default = 0xFF};
 	enum class mmap_access_mode {ReadOnly = 0, ReadWrite = 1};
 };
+
+[[nodiscard]] constexpr file_constants::sharing_mode operator|(const file_constants::sharing_mode lhs, const file_constants::sharing_mode rhs) noexcept
+{
+	return static_cast<file_constants::sharing_mode>(std::to_underlying(lhs) | std::to_underlying(rhs));
+}
 
 template <class Impl>
 class [[nodiscard]] file_interface final : public file_constants {
@@ -23,7 +32,7 @@ public:
 	inline bool open(const char* path,
 					 access_mode accessMode,
 					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-					 sharing_mode sharingMode = sharing_mode::ShareRead
+					 sharing_mode sharingMode = sharing_mode::Default
 			) noexcept
 	{
 		return open(path, accessMode, defaultOpenDisposition(accessMode), cacheMode, sharingMode);
@@ -33,7 +42,7 @@ public:
 	inline bool open(const wchar_t* path,
 					 access_mode accessMode,
 					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-					 sharing_mode sharingMode = sharing_mode::ShareRead
+					 sharing_mode sharingMode = sharing_mode::Default
 			) noexcept
 	{
 		return open(path, accessMode, defaultOpenDisposition(accessMode), cacheMode, sharingMode);
@@ -44,7 +53,7 @@ public:
 					 access_mode accessMode,
 					 open_disposition disposition,
 					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-					 sharing_mode sharingMode = sharing_mode::ShareRead
+					 sharing_mode sharingMode = sharing_mode::Default
 			) noexcept
 	{
 		return _impl.open(path, accessMode, disposition, cacheMode, sharingMode);
@@ -55,7 +64,7 @@ public:
 					 access_mode accessMode,
 					 open_disposition disposition,
 					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-					 sharing_mode sharingMode = sharing_mode::ShareRead
+					 sharing_mode sharingMode = sharing_mode::Default
 			) noexcept
 	{
 		return _impl.open(path, accessMode, disposition, cacheMode, sharingMode);
@@ -65,7 +74,7 @@ public:
 	inline static file_interface open_file(const char* path,
 		access_mode accessMode,
 		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-		sharing_mode sharingMode = sharing_mode::ShareRead
+		sharing_mode sharingMode = sharing_mode::Default
 	) noexcept
 	{
 		file_interface<Impl> f;
@@ -77,7 +86,7 @@ public:
 	inline static file_interface open_file(const wchar_t* path,
 		access_mode accessMode,
 		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-		sharing_mode sharingMode = sharing_mode::ShareRead
+		sharing_mode sharingMode = sharing_mode::Default
 	) noexcept
 	{
 		file_interface<Impl> f;
@@ -90,7 +99,7 @@ public:
 		access_mode accessMode,
 		open_disposition disposition,
 		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-		sharing_mode sharingMode = sharing_mode::ShareRead
+		sharing_mode sharingMode = sharing_mode::Default
 	) noexcept
 	{
 		file_interface<Impl> f;
@@ -103,7 +112,7 @@ public:
 		access_mode accessMode,
 		open_disposition disposition,
 		sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,
-		sharing_mode sharingMode = sharing_mode::ShareRead
+		sharing_mode sharingMode = sharing_mode::Default
 	) noexcept
 	{
 		file_interface<Impl> f;
