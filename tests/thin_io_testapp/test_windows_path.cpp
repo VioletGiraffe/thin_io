@@ -67,6 +67,7 @@ TEST_CASE("Windows path preparation normalizes ordinary absolute path components
 	CHECK(preparePath(R"(C:\..\file.txt)") == LR"(\\?\C:\file.txt)");
 	CHECK(preparePath(R"(\\server\share\folder\..\..\file.txt)") == LR"(\\?\UNC\server\share\file.txt)");
 	CHECK(preparePath("C:\\folder. \\file... ") == LR"(\\?\C:\folder\file)");
+	CHECK(preparePath(R"(C:\folder\...\file.txt)") == LR"(\\?\C:\folder\file.txt)"); // An all-periods component trims to nothing
 }
 
 TEST_CASE("Windows path preparation leaves already extended paths opaque", "[windows-path]")
@@ -174,7 +175,7 @@ TEST_CASE("Windows path preparation rejects null input", "[windows-path]")
 
 TEST_CASE("Windows path preparation rejects structurally malformed paths", "[windows-path]")
 {
-	const char* const malformedPaths[] { R"(\\server)", R"(\\server\)", R"(\\?\)" };
+	const char* const malformedPaths[] { R"(\\server)", R"(\\server\)", R"(\\?\)", R"(\\..\share)" };
 	for (const char* path : malformedPaths)
 	{
 		INFO("path: " << path);
@@ -189,6 +190,7 @@ TEST_CASE("Windows path preparation rejects unsupported namespaces", "[windows-p
 	const char* const unsupportedPaths[] {
 		R"(\\.\C:)",
 		R"(\\.\PhysicalDrive0)",
+		"//./PhysicalDrive0", // Separator conversion precedes the namespace check
 		R"(\??\C:\file.txt)",
 		R"(\Device\HarddiskVolume1\file.txt)"
 	};

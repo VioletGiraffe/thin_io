@@ -4,6 +4,7 @@
 #include "fs.hpp"
 
 #include <stdint.h>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -233,22 +234,34 @@ TEST_CASE("get_entry_metadata distinguishes sparse allocation from logical size"
 #ifdef _WIN32
 TEST_CASE("Windows metadata reports compressed allocation", "[fs][metadata][windows][compression]")
 {
-	static constexpr char compressedPath[] = "entry-metadata-compressed.file";
-	file::delete_file(compressedPath);
-	if (!createCompressedFile(compressedPath))
+	std::string compressedPath = "entry-metadata-compressed.file";
+	file::delete_file(compressedPath.c_str());
+	if (!createCompressedFile(compressedPath.c_str()))
 	{
-		WARN("The test filesystem does not support creating compressed files");
-		file::delete_file(compressedPath);
-		return;
+		file::delete_file(compressedPath.c_str());
+
+		// The working directory may sit on a filesystem without NTFS compression (e. g. ReFS on CI); retry in %TEMP%
+		char tempDirectory[MAX_PATH];
+		const DWORD tempLength = ::GetTempPathA(MAX_PATH, tempDirectory);
+		REQUIRE(tempLength > 0);
+		REQUIRE(tempLength < MAX_PATH);
+		compressedPath = std::string{tempDirectory, tempLength} + "entry-metadata-compressed.file";
+		file::delete_file(compressedPath.c_str());
+		if (!createCompressedFile(compressedPath.c_str()))
+		{
+			WARN("No available filesystem supports creating compressed files");
+			file::delete_file(compressedPath.c_str());
+			return;
+		}
 	}
 
-	const auto compressed = get_entry_metadata(compressedPath, link_behavior::do_not_follow);
+	const auto compressed = get_entry_metadata(compressedPath.c_str(), link_behavior::do_not_follow);
 	REQUIRE(compressed);
 	CHECK(compressed->attributes.compressed);
 	CHECK(compressed->logical_size == sparseFileSize);
 	CHECK(compressed->allocated_size < compressed->logical_size);
 
-	REQUIRE(file::delete_file(compressedPath));
+	REQUIRE(file::delete_file(compressedPath.c_str()));
 }
 #endif
 
@@ -322,6 +335,23 @@ TEST_CASE("POSIX metadata explicitly follows or inspects symbolic links", "[fs][
 
 	REQUIRE(file::delete_file(linkPath));
 	REQUIRE(file::delete_file(targetPath));
+}
+
+TEST_CASE("POSIX metadata for a dangling symbolic link", "[fs][metadata][link]")
+{
+	static constexpr char linkPath[] = "entry-metadata-dangling.link";
+	::unlink(linkPath);
+	REQUIRE(::symlink("no-such-target-entry", linkPath) == 0);
+
+	const auto inspected = get_entry_metadata(linkPath, link_behavior::do_not_follow);
+	REQUIRE(inspected);
+	CHECK(inspected->attributes.is_link);
+
+	const auto followed = get_entry_metadata(linkPath, link_behavior::follow);
+	REQUIRE_FALSE(followed);
+	CHECK(followed.error().native_code == ENOENT);
+
+	REQUIRE(::unlink(linkPath) == 0);
 }
 
 TEST_CASE("POSIX metadata retains an inaccessible-path error when permissions can be enforced", "[fs][metadata]")

@@ -362,7 +362,7 @@ TEST_CASE("set_times rejects times outside the representable FILETIME range", "[
 	REQUIRE(!set_times(testFilePath, requested));
 	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
 
-	// The range check precedes opening the handle, so nothing can have been written
+	// The range check precedes the SetFileTime call, so nothing can have been written
 	const entry_times actual = readTimes(testFilePath);
 	CHECK(actual.last_write == testLastWrite);
 	CHECK(actual.last_access == testLastAccess);

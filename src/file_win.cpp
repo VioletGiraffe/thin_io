@@ -161,8 +161,14 @@ std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos
 
 	o.OffsetHigh = static_cast<DWORD>(pos >> 32);
 	o.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFu);
-	return ::ReadFile(_h, dest, requestableIoSize(size), &bytesRead, &o) ?
-			bytesRead : std::optional<uint64_t>{};
+	if (::ReadFile(_h, dest, requestableIoSize(size), &bytesRead, &o) != 0)
+		return bytesRead;
+
+	// ReadFile reports an offset at or past EOF as ERROR_HANDLE_EOF; POSIX pread returns 0. Normalized to 0.
+	if (::GetLastError() == ERROR_HANDLE_EOF)
+		return 0;
+
+	return {};
 }
 
 std::optional<uint64_t> file_impl::pwrite(const void *src, uint64_t size, uint64_t pos) noexcept
@@ -186,10 +192,30 @@ std::optional<uint64_t> file_impl::size() const noexcept
 			static_cast<uint64_t>(li.QuadPart): std::optional<uint64_t>{};
 }
 
+// FileBasicInfo queries require FILE_READ_ATTRIBUTES, which a write-only open lacks. Attribute-only access is exempt
+// from sharing restrictions, so a temporary reopen is the universal fallback.
+[[nodiscard]] static bool queryBasicInfo(const HANDLE fileHandle, FILE_BASIC_INFO& info) noexcept
+{
+	if (::GetFileInformationByHandleEx(fileHandle, FileBasicInfo, &info, sizeof(info)) != 0)
+		return true;
+
+	const HANDLE attributeHandle = ::ReOpenFile(fileHandle, FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+	if (attributeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		return false;
+
+	const bool success = ::GetFileInformationByHandleEx(attributeHandle, FileBasicInfo, &info, sizeof(info)) != 0;
+	const DWORD error = success ? 0 : ::GetLastError(); // CloseHandle overwrites the thread's last error
+	::CloseHandle(attributeHandle);
+	if (!success) [[unlikely]]
+		::SetLastError(error);
+	return success;
+}
+
 std::optional<entry_times> file_impl::times() const noexcept
 {
 	FILE_BASIC_INFO info;
-	if (::GetFileInformationByHandleEx(_h, FileBasicInfo, &info, sizeof(info)) == 0) [[unlikely]]
+	if (!queryBasicInfo(_h, info)) [[unlikely]]
 		return {};
 
 	entry_times times;
@@ -211,7 +237,7 @@ bool file_impl::set_times(const entry_times& times) noexcept
 [[nodiscard]] static bool updateAttributeFlag(const HANDLE fileHandle, const DWORD flag, const bool enable) noexcept
 {
 	FILE_BASIC_INFO info;
-	if (::GetFileInformationByHandleEx(fileHandle, FileBasicInfo, &info, sizeof(info)) == 0) [[unlikely]]
+	if (!queryBasicInfo(fileHandle, info)) [[unlikely]]
 		return false;
 
 	const DWORD oldAttributes = info.FileAttributes;
@@ -229,7 +255,7 @@ bool file_impl::set_times(const entry_times& times) noexcept
 std::optional<file_permissions> file_impl::permissions() const noexcept
 {
 	FILE_BASIC_INFO info;
-	if (::GetFileInformationByHandleEx(_h, FileBasicInfo, &info, sizeof(info)) == 0) [[unlikely]]
+	if (!queryBasicInfo(_h, info)) [[unlikely]]
 		return {};
 
 	return file_permissions{ .read_only = (info.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0 };

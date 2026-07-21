@@ -253,6 +253,23 @@ TEST_CASE("Windows clearing the last remaining attribute flag works", "[file][wi
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("Windows delete_file fails on a read-only file", "[file][windows]")
+{
+	static constexpr const char testFilePath[] = "thin_io_ro_delete.tmp";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(f.set_permissions(file_permissions{ .read_only = true }));
+	REQUIRE(f.close());
+
+	CHECK_FALSE(file::delete_file(testFilePath));
+	CHECK(file::error_code() == ERROR_ACCESS_DENIED);
+
+	REQUIRE(::SetFileAttributesA(testFilePath, FILE_ATTRIBUTE_NORMAL) != 0);
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("Windows file APIs support long paths independently of process policy", "[file][windows]")
 {
 	std::array<wchar_t, windows_path_buffer::max_length + 1> currentDirectory{};

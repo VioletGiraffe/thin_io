@@ -88,3 +88,12 @@ TEST_CASE("filesystem error formatting retains the native code", "[filesystem-er
 	CHECK(text.starts_with(std::to_string(error.native_code)));
 	CHECK(text.find(": ") != std::string::npos);
 }
+
+#ifdef _WIN32
+TEST_CASE("filesystem error formatting handles a code with no description", "[filesystem-error]")
+{
+	// Codes beyond the int range have no std::system_category description, so only the number remains
+	const filesystem_error error{ .native_code = 0xFFFF'FFFFu };
+	CHECK(format_filesystem_error(error) == "4294967295");
+}
+#endif

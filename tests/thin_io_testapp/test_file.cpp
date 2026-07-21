@@ -401,6 +401,8 @@ try {
 	REQUIRE(f.pos() == positionBeforeSecondResize);
 	REQUIRE(f.at_end());
 	REQUIRE(f.read(buf, 1) == 0);
+	REQUIRE(!f.resize(UINT64_MAX)); // Larger than any native file size type can represent
+	REQUIRE(f.size() == 0);
 	REQUIRE(f.close());
 	REQUIRE(!f.at_end());
 
@@ -540,10 +542,15 @@ TEST_CASE("pread", "[file]")
 	char buf[sizeof(testString)];
 	REQUIRE(f.pread(buf, 5, 20) == 5);
 	REQUIRE(::memcmp(buf, "jumps", 5) == 0);
+	REQUIRE_WIN(f.pos() == 25); // The documented platform divergence: Win32 pread moves the file position
+	REQUIRE_LINUX(f.pos() == 0);
 	REQUIRE(f.pread(buf, 3, 0) == 3);
 	REQUIRE(::memcmp(buf, "The", 3) == 0);
 	REQUIRE(f.pread(buf, 4, 40) == 4);
 	REQUIRE(::memcmp(buf, "dog", 4) == 0);
+	REQUIRE(f.pread(buf, 10, 40) == 4); // A read crossing EOF is partial
+	REQUIRE(f.pread(buf, 4, sizeof(testString)) == 0); // At EOF
+	REQUIRE(f.pread(buf, 4, sizeof(testString) + 100) == 0); // Past EOF
 	REQUIRE(f.close());
 
 	REQUIRE(file::delete_file(testFilePath));
@@ -558,17 +565,100 @@ TEST_CASE("pwrite", "[file]")
 	file f;
 	REQUIRE(f.open(testFilePath, file::access_mode::Write));
 	REQUIRE(f.pwrite(testString, sizeof(testString), 0) == sizeof(testString));
+	REQUIRE_WIN(f.pos() == sizeof(testString)); // The documented platform divergence: Win32 pwrite moves the file position
+	REQUIRE_LINUX(f.pos() == 0);
 	REQUIRE(f.pwrite("small", 5, 4) == 5);
 	REQUIRE(f.pwrite("cat", 3, 40) == 3);
+	REQUIRE(f.pwrite("!", 1, sizeof(testString) + 16) == 1); // Past EOF: extends the file, zero-filling the gap
 	REQUIRE(f.close());
 
 	REQUIRE(f.open(testFilePath, file::access_mode::Read));
+	REQUIRE(f.size() == sizeof(testString) + 17);
 	char buf[sizeof(testString)];
 	REQUIRE(f.read(buf, sizeof(testString)) == sizeof(testString));
 	REQUIRE(::memcmp(buf, "The small brown fox jumps over the lazy cat", sizeof(testString)) == 0);
+	char tail[17];
+	REQUIRE(f.read(tail, sizeof(tail)) == sizeof(tail));
+	const char zeros[16] = {};
+	CHECK(::memcmp(tail, zeros, sizeof(zeros)) == 0);
+	CHECK(tail[16] == '!');
 	REQUIRE(f.close());
 
 	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("open on an already open file switches to the new file", "[file]")
+{
+	static constexpr const char firstPath[] = "test-first.file";
+	static constexpr const char secondPath[] = "test-second.file";
+	file::delete_file(firstPath);
+	file::delete_file(secondPath);
+	REQUIRE(createTestFile(firstPath, "first", 5));
+	REQUIRE(createTestFile(secondPath, "second", 6));
+
+	file f;
+	REQUIRE(f.open(firstPath, file::access_mode::Read));
+	REQUIRE(f.open(secondPath, file::access_mode::Read));
+	char buf[6];
+	REQUIRE(f.read(buf, 6) == 6);
+	CHECK(::memcmp(buf, "second", 6) == 0);
+
+	// The reopen must have closed the first handle - on Windows the deletion would fail otherwise
+	REQUIRE(file::delete_file(firstPath));
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(secondPath));
+}
+
+TEST_CASE("fsync and fdatasync", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Write));
+	REQUIRE(f.write("data", 4) == 4);
+	REQUIRE(f.fsync());
+	REQUIRE(f.fdatasync());
+	REQUIRE(f.close());
+
+	REQUIRE(!f.fsync()); // Closed file
+	REQUIRE(!f.fdatasync());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("NoOsCaching - aligned unbuffered round-trip", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::delete_file(testFilePath);
+
+	static constexpr size_t ioSize = 8192; // A multiple of any common sector size, as unbuffered I/O requires
+	alignas(4096) static uint8_t writeBuffer[ioSize];
+	alignas(4096) static uint8_t readBuffer[ioSize];
+	for (size_t i = 0; i < ioSize; ++i)
+		writeBuffer[i] = static_cast<uint8_t>(i * 37);
+
+	file f;
+	if (!f.open(testFilePath, file::access_mode::Write, file::sys_cache_mode::NoOsCaching))
+	{
+		WARN("The test filesystem does not support unbuffered I/O; NoOsCaching assertions skipped");
+		return;
+	}
+
+	REQUIRE(f.write(writeBuffer, ioSize) == ioSize);
+	REQUIRE(f.close());
+
+	REQUIRE(f.open(testFilePath, file::access_mode::Read, file::sys_cache_mode::NoOsCaching));
+	REQUIRE(f.size() == ioSize);
+	REQUIRE(f.read(readBuffer, ioSize) == ioSize);
+	CHECK(::memcmp(writeBuffer, readBuffer, ioSize) == 0);
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("text_for_error produces a description", "[file]")
+{
+	CHECK(!file::text_for_error(2).empty()); // ERROR_FILE_NOT_FOUND and ENOENT both happen to be 2
 }
 
 TEST_CASE("write-read sharing", "[file]")
@@ -703,6 +793,31 @@ TEST_CASE("mmap - offset past the first page", "[file]")
 	}
 
 	REQUIRE(f.size() == offset + sizeof(marker)); // Mapping the tail of the file must not have grown it
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("unmap - only a currently mapped address unmaps", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	static constexpr auto size = sizeof(testString);
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, testString, size));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
+	auto* first = f.mmap(file::mmap_access_mode::ReadOnly, 0, size);
+	auto* second = f.mmap(file::mmap_access_mode::ReadOnly, 0, size);
+	REQUIRE(first);
+	REQUIRE(second);
+
+	CHECK(!f.unmap(nullptr));
+	REQUIRE(f.unmap(first));
+	CHECK(!f.unmap(first)); // No longer mapped
+	CHECK(::memcmp(second, testString, size) == 0); // The second mapping is independent and still alive
+	REQUIRE(f.unmap(second));
+
 	REQUIRE(f.close());
 	REQUIRE(file::delete_file(testFilePath));
 }
@@ -898,6 +1013,11 @@ TEST_CASE("handle-based metadata reads work on a read-only open", "[file]")
 	entry_times someTime;
 	someTime.last_write = timestamp{ .seconds = 1'600'000'000, .nanoseconds = 0 };
 	REQUIRE_WIN(!f.set_times(someTime)); // A read-only open carries no FILE_WRITE_ATTRIBUTES access
+
+	REQUIRE(f.close());
+	REQUIRE(f.open(testFilePath, file::access_mode::Write, file::open_disposition::OpenExisting));
+	REQUIRE(f.times()); // Must work despite the write-only open having no read access
+	REQUIRE(f.permissions());
 
 	REQUIRE(f.close());
 	REQUIRE(file::delete_file(testFilePath));

@@ -320,6 +320,27 @@ TEST_CASE("Windows directory enumeration reports reparse points and their tag", 
 	REQUIRE(removeDirectory(directoryPath));
 }
 
+TEST_CASE("Windows drive-relative enumeration lists the drive's current directory", "[fs][directory][windows]")
+{
+	std::array<wchar_t, windows_path_buffer::max_length + 1> currentDirectory{};
+	const DWORD length = ::GetCurrentDirectoryW(static_cast<DWORD>(currentDirectory.size()), currentDirectory.data());
+	REQUIRE(length > 1);
+	REQUIRE(length < currentDirectory.size());
+	if (currentDirectory[1] != L':')
+	{
+		WARN("The current directory is not on a drive; drive-relative enumeration assertion skipped");
+		return;
+	}
+
+	// "X:" must resolve to the drive's current directory, not to its root
+	const wchar_t driveRelative[3] { currentDirectory[0], L':', L'\0' };
+	const auto relative = list_directory(driveRelative);
+	const auto current = list_directory(".");
+	REQUIRE(relative);
+	REQUIRE(current);
+	CHECK(*relative == *current);
+}
+
 TEST_CASE("Windows directory enumeration supports long native paths", "[fs][directory][windows]")
 {
 	std::array<wchar_t, windows_path_buffer::max_length + 1> currentDirectory{};
