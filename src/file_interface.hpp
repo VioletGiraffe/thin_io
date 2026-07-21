@@ -11,7 +11,8 @@ struct file_constants {
 	// write access. Existing contents are preserved by OpenExisting, OpenOrCreate, and a failed CreateNew.
 	enum class open_disposition {OpenExisting, OpenOrCreate, CreateNew, CreateOrTruncate};
 	enum class sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
-	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = 8};
+	// ShareExec equals ShareRead: NT's share-access check classifies execute access as read, so they cannot differ.
+	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = ShareRead};
 	enum class mmap_access_mode {ReadOnly = 0, ReadWrite = 1};
 };
 
