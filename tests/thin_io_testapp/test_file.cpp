@@ -943,12 +943,15 @@ TEST_CASE("handle-based permissions round-trip", "[file]")
 	const auto initial = f.permissions();
 	REQUIRE(initial);
 #ifdef _WIN32
-	CHECK(!initial->read_only);
-	REQUIRE(f.set_permissions(file_permissions{ .read_only = true }));
-	REQUIRE(f.permissions());
-	CHECK(f.permissions()->read_only);
-	REQUIRE(f.set_permissions(file_permissions{ .read_only = false })); // Clear it back so that the file can be deleted
-	CHECK(!f.permissions()->read_only);
+	CHECK(*initial == file_permissions{});
+	REQUIRE(f.set_permissions(file_permissions{ .read_only = true, .hidden = true, .system = true }));
+	const auto changed = f.permissions();
+	REQUIRE(changed);
+	CHECK(changed->read_only);
+	CHECK(changed->hidden);
+	CHECK(changed->system);
+	REQUIRE(f.set_permissions(file_permissions{})); // Clear everything back so that the file can be deleted
+	CHECK(f.permissions() == file_permissions{});
 #else
 	REQUIRE(f.set_permissions(file_permissions{ .mode = 0754 }));
 	CHECK(f.permissions()->mode == 0754);

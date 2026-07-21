@@ -214,23 +214,29 @@ TEST_CASE("Windows handle-based set_times rejects an unrepresentable time", "[fi
 	REQUIRE(file::delete_file(testFilePath));
 }
 
-TEST_CASE("Windows attribute updates preserve the other attribute flags", "[file][windows]")
+TEST_CASE("Windows attribute updates preserve the flags outside their scope", "[file][windows]")
 {
 	static constexpr const char testFilePath[] = "thin_io_attrs.tmp";
 	file::delete_file(testFilePath);
 
 	file f;
 	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::CreateNew));
+	REQUIRE(::SetFileAttributesA(testFilePath, FILE_ATTRIBUTE_ARCHIVE) != 0); // A known flag outside the permission set
 
 	REQUIRE(f.set_permissions(file_permissions{ .read_only = true }));
 	REQUIRE(f.set_hidden(true)); // Must not clobber the read-only flag
 	CHECK(f.permissions()->read_only);
-	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) != 0);
+	CHECK(f.permissions()->hidden);
 
-	REQUIRE(f.set_permissions(file_permissions{ .read_only = false })); // Must not clobber the hidden flag either
-	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) != 0);
+	// set_permissions owns all three of its flags: hidden was requested false here, so it must be cleared
+	REQUIRE(f.set_permissions(file_permissions{ .system = true }));
+	const auto afterRewrite = f.permissions();
+	REQUIRE(afterRewrite);
+	CHECK(*afterRewrite == file_permissions{ .system = true });
 
-	REQUIRE(f.set_hidden(false));
+	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_ARCHIVE) != 0); // Untouched throughout
+
+	REQUIRE(f.set_permissions(file_permissions{}));
 	REQUIRE(f.close());
 	REQUIRE(file::delete_file(testFilePath));
 }

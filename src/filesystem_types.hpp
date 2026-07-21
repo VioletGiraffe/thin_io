@@ -45,6 +45,8 @@ inline constexpr bool creation_time_settable =
 struct file_permissions {
 #ifdef _WIN32
 	bool read_only = false; // The only permission a Windows file itself carries; ACLs come from the destination directory
+	bool hidden = false;    // Identity-relevant attributes preserved by mainstream copiers, so captured and
+	bool system = false;    // applied together with the permission bit
 #else
 	uint32_t mode = 0; // st_mode permission bits (07777): rwx + setuid/setgid/sticky
 #endif

@@ -233,15 +233,16 @@ bool file_impl::set_times(const entry_times& times) noexcept
 	return setFileTimes(_h, times);
 }
 
-// Requires a handle with FILE_WRITE_ATTRIBUTES access, which GENERIC_WRITE includes
-[[nodiscard]] static bool updateAttributeFlag(const HANDLE fileHandle, const DWORD flag, const bool enable) noexcept
+// Sets the masked attribute bits to desiredValues, leaving the bits outside the mask untouched.
+// Requires a handle with FILE_WRITE_ATTRIBUTES access, which GENERIC_WRITE includes.
+[[nodiscard]] static bool updateAttributeFlags(const HANDLE fileHandle, const DWORD mask, const DWORD desiredValues) noexcept
 {
 	FILE_BASIC_INFO info;
 	if (!queryBasicInfo(fileHandle, info)) [[unlikely]]
 		return false;
 
 	const DWORD oldAttributes = info.FileAttributes;
-	DWORD newAttributes = enable ? (oldAttributes | flag) : (oldAttributes & ~flag);
+	DWORD newAttributes = (oldAttributes & ~mask) | (desiredValues & mask);
 	if (newAttributes == oldAttributes)
 		return true;
 	if (newAttributes == 0)
@@ -258,17 +259,25 @@ std::optional<file_permissions> file_impl::permissions() const noexcept
 	if (!queryBasicInfo(_h, info)) [[unlikely]]
 		return {};
 
-	return file_permissions{ .read_only = (info.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0 };
+	return file_permissions{
+		.read_only = (info.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0,
+		.hidden = (info.FileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0,
+		.system = (info.FileAttributes & FILE_ATTRIBUTE_SYSTEM) != 0
+	};
 }
 
 bool file_impl::set_permissions(const file_permissions permissions) noexcept
 {
-	return updateAttributeFlag(_h, FILE_ATTRIBUTE_READONLY, permissions.read_only);
+	static constexpr DWORD mask = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+	const DWORD desiredValues = (permissions.read_only ? FILE_ATTRIBUTE_READONLY : 0)
+		| (permissions.hidden ? FILE_ATTRIBUTE_HIDDEN : 0)
+		| (permissions.system ? FILE_ATTRIBUTE_SYSTEM : 0);
+	return updateAttributeFlags(_h, mask, desiredValues);
 }
 
 bool file_impl::set_hidden(const bool hidden) noexcept
 {
-	return updateAttributeFlag(_h, FILE_ATTRIBUTE_HIDDEN, hidden);
+	return updateAttributeFlags(_h, FILE_ATTRIBUTE_HIDDEN, hidden ? FILE_ATTRIBUTE_HIDDEN : 0);
 }
 
 std::optional<uint64_t> file_impl::pos() const noexcept

@@ -222,7 +222,7 @@ public:
 		return _impl.set_times(times);
 	}
 
-	// The permissions the open file carries on its own: POSIX mode bits / the Windows read-only attribute.
+	// What the open file carries on its own: POSIX mode bits / the Windows read-only, hidden, and system attributes.
 	[[nodiscard]] inline std::optional<file_permissions> permissions() const noexcept {
 		return _impl.permissions();
 	}
