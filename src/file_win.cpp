@@ -281,15 +281,15 @@ void* file_impl::mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) n
 	if (offset != 0)
 	{
 		// Query only once
-		static const uint64_t pageSize = [] {
+		static const uint64_t allocationGranularity = [] {
 			SYSTEM_INFO info;
 			::GetSystemInfo(&info);
 
-			return info.dwPageSize;
+			return info.dwAllocationGranularity;
 		}();
 
-		const auto nPages = offset / pageSize;
-		actualOffset = nPages * pageSize; // Find the closest suitable lower offset
+		// MapViewOfFile requires the offset to be a multiple of the allocation granularity (usually 64 KiB), not the page size
+		actualOffset = (offset / allocationGranularity) * allocationGranularity; // Find the closest suitable lower offset
 	}
 
 	const uint64_t offsetDifference = offset - actualOffset;
