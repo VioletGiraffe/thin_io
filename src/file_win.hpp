@@ -56,6 +56,12 @@ public:
 
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
 
+	[[nodiscard]] std::optional<entry_times> times() const noexcept;
+	[[nodiscard]] bool set_times(const entry_times& times) noexcept;
+	[[nodiscard]] std::optional<file_permissions> permissions() const noexcept;
+	[[nodiscard]] bool set_permissions(file_permissions permissions) noexcept;
+	[[nodiscard]] bool set_hidden(bool hidden) noexcept;
+
 	static bool delete_file(const char* filePath) noexcept;
 	static bool delete_file(const wchar_t* filePath) noexcept;
 

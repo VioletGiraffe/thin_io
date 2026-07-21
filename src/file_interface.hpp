@@ -1,4 +1,6 @@
 #pragma once
+#include "filesystem_types.hpp"
+
 #include <optional>
 #include <stdint.h>
 #include <string>
@@ -207,6 +209,32 @@ public:
 		const auto currentSize = size();
 		return currentPosition && currentSize && *currentPosition >= *currentSize;
 	}
+
+	// Timestamps of the open file, read through the handle (fstat / GetFileInformationByHandleEx); for a file opened
+	// through a link these are inherently the followed target's. Same contract as get_times() / set_times() in fs.hpp:
+	// a nullopt member is not provided / left untouched, and a creation time is silently ignored where not settable.
+	[[nodiscard]] inline std::optional<entry_times> times() const noexcept {
+		return _impl.times();
+	}
+
+	[[nodiscard]] inline bool set_times(const entry_times& times) noexcept {
+		return _impl.set_times(times);
+	}
+
+	// The permissions the open file carries on its own: POSIX mode bits / the Windows read-only attribute.
+	[[nodiscard]] inline std::optional<file_permissions> permissions() const noexcept {
+		return _impl.permissions();
+	}
+
+	[[nodiscard]] inline bool set_permissions(const file_permissions permissions) noexcept {
+		return _impl.set_permissions(permissions);
+	}
+
+#ifdef _WIN32
+	[[nodiscard]] inline bool set_hidden(const bool hidden) noexcept {
+		return _impl.set_hidden(hidden);
+	}
+#endif
 
 	static bool delete_file(const char* filePath) noexcept {
 		return Impl::delete_file(filePath);

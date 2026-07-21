@@ -15,6 +15,43 @@ using native_char = char;
 using native_string = std::string; // Native POSIX names are byte strings and need not contain valid UTF-8.
 #endif
 
+// A point in time relative to the Unix epoch, mirroring struct timespec: nanoseconds is always a positive offset from
+// seconds, including for pre-1970 times, where seconds is negative.
+struct timestamp {
+	int64_t seconds = 0;
+	uint32_t nanoseconds = 0; // [0, 999'999'999]
+
+	[[nodiscard]] bool operator==(const timestamp&) const noexcept = default;
+};
+
+// What a nullopt member means depends on the direction: set_times() leaves that timestamp untouched, get_times()
+// reports that the platform or the filesystem does not provide it.
+struct entry_times {
+	std::optional<timestamp> creation;
+	std::optional<timestamp> last_access;
+	std::optional<timestamp> last_write;
+};
+
+// False on Linux, where the birth time is assigned by the kernel at inode creation and no API can change it -
+// entry_times::creation is silently ignored there. Windows and Darwin can both set it.
+inline constexpr bool creation_time_settable =
+#if defined(_WIN32) || defined(__APPLE__)
+	true;
+#else
+	false;
+#endif
+
+// Round-trip value like entry_times: captured from one file and applied to another.
+struct file_permissions {
+#ifdef _WIN32
+	bool read_only = false; // The only permission a Windows file itself carries; ACLs come from the destination directory
+#else
+	uint32_t mode = 0; // st_mode permission bits (07777): rwx + setuid/setgid/sticky
+#endif
+
+	[[nodiscard]] bool operator==(const file_permissions&) const noexcept = default;
+};
+
 enum class entry_kind : uint8_t {
 	unknown,
 	regular_file,

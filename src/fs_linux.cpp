@@ -1,4 +1,5 @@
 #include "fs.hpp"
+#include "timestamp_linux.hpp"
 
 #include <dirent.h>
 #include <errno.h>
@@ -25,27 +26,6 @@
 #endif
 
 namespace thin_io {
-
-[[nodiscard]] static timespec toTimespec(const timestamp& t) noexcept
-{
-	timespec ts{};
-	ts.tv_sec = static_cast<time_t>(t.seconds);
-	ts.tv_nsec = static_cast<long>(t.nanoseconds);
-	return ts;
-}
-
-// UTIME_OMIT in tv_nsec is how utimensat() is told to leave a timestamp alone.
-[[nodiscard]] static timespec toTimespecOrOmit(const std::optional<timestamp>& t) noexcept
-{
-	if (!t)
-	{
-		timespec ts{};
-		ts.tv_nsec = UTIME_OMIT;
-		return ts;
-	}
-
-	return toTimespec(*t);
-}
 
 bool set_times(const char* path, const entry_times& times) noexcept
 {
@@ -78,11 +58,6 @@ bool set_times(const char* path, const entry_times& times) noexcept
 	return true;
 }
 
-[[nodiscard]] static timestamp fromTimespec(const timespec& ts) noexcept
-{
-	return timestamp{ .seconds = ts.tv_sec, .nanoseconds = static_cast<uint32_t>(ts.tv_nsec) };
-}
-
 std::optional<entry_times> get_times(const char* path) noexcept
 {
 	struct stat info;
@@ -99,11 +74,7 @@ std::optional<entry_times> get_times(const char* path) noexcept
 	times.last_write = fromTimespec(info.st_mtim);
 
 #ifdef STATX_BTIME
-	// The birth time is absent from stat(): reading it needs statx(), which arrived in kernel 4.11 and reports the
-	// field only on the filesystems that keep one. Both shortfalls surface as a birth time this call leaves unset.
-	struct statx extendedInfo;
-	if (::statx(AT_FDCWD, path, 0, STATX_BTIME, &extendedInfo) == 0 && (extendedInfo.stx_mask & STATX_BTIME) != 0)
-		times.creation = timestamp{ .seconds = extendedInfo.stx_btime.tv_sec, .nanoseconds = extendedInfo.stx_btime.tv_nsec };
+	times.creation = statxBirthTime(AT_FDCWD, path, 0);
 #endif
 #endif
 

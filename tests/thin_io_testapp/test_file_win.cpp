@@ -176,6 +176,83 @@ TEST_CASE("Windows explicit sharing mode is honored exactly", "[file][windows]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("Windows set_hidden toggles the hidden attribute", "[file][windows]")
+{
+	static constexpr const char testFilePath[] = "thin_io_hidden.tmp";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Write, file::open_disposition::CreateNew));
+
+	REQUIRE(f.set_hidden(true));
+	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) != 0);
+
+	REQUIRE(f.set_hidden(false));
+	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) == 0);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("Windows handle-based set_times rejects an unrepresentable time", "[file][windows]")
+{
+	static constexpr const char testFilePath[] = "thin_io_times.tmp";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::CreateNew));
+	const auto before = f.times();
+	REQUIRE(before);
+
+	entry_times requested;
+	requested.last_write = timestamp{ .seconds = -12'000'000'000, .nanoseconds = 0 }; // Before the FILETIME epoch
+	CHECK_FALSE(f.set_times(requested));
+	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
+	CHECK(f.times()->last_write == before->last_write);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("Windows attribute updates preserve the other attribute flags", "[file][windows]")
+{
+	static constexpr const char testFilePath[] = "thin_io_attrs.tmp";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::CreateNew));
+
+	REQUIRE(f.set_permissions(file_permissions{ .read_only = true }));
+	REQUIRE(f.set_hidden(true)); // Must not clobber the read-only flag
+	CHECK(f.permissions()->read_only);
+	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) != 0);
+
+	REQUIRE(f.set_permissions(file_permissions{ .read_only = false })); // Must not clobber the hidden flag either
+	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) != 0);
+
+	REQUIRE(f.set_hidden(false));
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("Windows clearing the last remaining attribute flag works", "[file][windows]")
+{
+	// A file whose only attribute is HIDDEN: clearing it computes an attribute value of 0, which
+	// SetFileInformationByHandle would treat as "leave unchanged" without the FILE_ATTRIBUTE_NORMAL substitution.
+	static constexpr const char testFilePath[] = "thin_io_attrs.tmp";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::CreateNew));
+	REQUIRE(::SetFileAttributesA(testFilePath, FILE_ATTRIBUTE_HIDDEN) != 0);
+
+	REQUIRE(f.set_hidden(false));
+	CHECK((::GetFileAttributesA(testFilePath) & FILE_ATTRIBUTE_HIDDEN) == 0);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("Windows file APIs support long paths independently of process policy", "[file][windows]")
 {
 	std::array<wchar_t, windows_path_buffer::max_length + 1> currentDirectory{};

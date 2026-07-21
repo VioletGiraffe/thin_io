@@ -1,4 +1,5 @@
 #include "file_linux.hpp"
+#include "timestamp_linux.hpp"
 
 #include <assert.h>
 #include <errno.h>
@@ -14,6 +15,8 @@
 #include <limits>
 
 #ifdef __APPLE__
+#include <sys/attr.h> // fsetattrlist, ATTR_CMN_CRTIME
+
 #define O_LARGEFILE 0 // Not needed
 #define pread64 pread
 #define pwrite64 pwrite
@@ -138,6 +141,70 @@ std::optional<uint64_t> file_impl::size() const noexcept
 	if (::fstat64(_fd, &s) == 0)
 		return static_cast<uint64_t>(s.st_size);
 	return {};
+}
+
+std::optional<entry_times> file_impl::times() const noexcept
+{
+	struct stat64 info;
+	if (::fstat64(_fd, &info) != 0) [[unlikely]]
+		return {};
+
+	entry_times times;
+#ifdef __APPLE__
+	times.creation = fromTimespec(info.st_birthtimespec);
+	times.last_access = fromTimespec(info.st_atimespec);
+	times.last_write = fromTimespec(info.st_mtimespec);
+#else
+	times.last_access = fromTimespec(info.st_atim);
+	times.last_write = fromTimespec(info.st_mtim);
+#ifdef STATX_BTIME
+	times.creation = statxBirthTime(_fd, "", AT_EMPTY_PATH);
+#endif
+#endif
+
+	return times;
+}
+
+bool file_impl::set_times(const entry_times& times) noexcept
+{
+	if (times.last_access || times.last_write)
+	{
+		const timespec ts[2] { toTimespecOrOmit(times.last_access), toTimespecOrOmit(times.last_write) };
+		if (::futimens(_fd, ts) != 0)
+			return false;
+	}
+
+#ifdef __APPLE__
+	// Applied after futimens() so that an explicitly requested birth time cannot be clobbered by a side effect of
+	// setting the modification time.
+	if (times.creation)
+	{
+		attrlist attributes{};
+		attributes.bitmapcount = ATTR_BIT_MAP_COUNT;
+		attributes.commonattr = ATTR_CMN_CRTIME;
+
+		timespec creation = toTimespec(*times.creation);
+		if (::fsetattrlist(_fd, &attributes, &creation, sizeof(creation), 0) != 0)
+			return false;
+	}
+#endif
+
+	return true;
+}
+
+std::optional<file_permissions> file_impl::permissions() const noexcept
+{
+	struct stat64 info;
+	if (::fstat64(_fd, &info) != 0) [[unlikely]]
+		return {};
+
+	return file_permissions{ .mode = static_cast<uint32_t>(info.st_mode) & 07777u };
+}
+
+bool file_impl::set_permissions(const file_permissions permissions) noexcept
+{
+	// The mask guards against a caller passing a raw st_mode with file-type bits
+	return ::fchmod(_fd, static_cast<mode_t>(permissions.mode & 07777u)) == 0;
 }
 
 std::optional<uint64_t> file_impl::pos() const noexcept

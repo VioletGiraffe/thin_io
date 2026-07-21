@@ -773,6 +773,154 @@ TEST_CASE("mmap - mappings survive moving the file object", "[file]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("handle-based times round-trip", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, testString, sizeof(testString)));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
+
+	const auto initial = f.times();
+	REQUIRE(initial);
+	CHECK(initial->last_access);
+	CHECK(initial->last_write);
+
+	// All values are multiples of 100 ns so that NTFS can represent them exactly
+	entry_times requested;
+	if constexpr (creation_time_settable)
+		requested.creation = timestamp{ .seconds = 1'400'000'000, .nanoseconds = 100'000'000 };
+	requested.last_access = timestamp{ .seconds = 1'500'000'000, .nanoseconds = 250'000'000 };
+	requested.last_write = timestamp{ .seconds = 1'600'000'000, .nanoseconds = 500'000'000 };
+	REQUIRE(f.set_times(requested));
+
+	auto actual = f.times();
+	REQUIRE(actual);
+	CHECK(actual->last_access == requested.last_access);
+	CHECK(actual->last_write == requested.last_write);
+	if constexpr (creation_time_settable)
+		CHECK(actual->creation == requested.creation);
+
+	// A nullopt member leaves the current value untouched
+	entry_times writeOnly;
+	writeOnly.last_write = timestamp{ .seconds = 1'700'000'000, .nanoseconds = 0 };
+	REQUIRE(f.set_times(writeOnly));
+	actual = f.times();
+	REQUIRE(actual);
+	CHECK(actual->last_write == writeOnly.last_write);
+	CHECK(actual->last_access == requested.last_access);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("handle-based permissions round-trip", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, "x", 1));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
+
+	const auto initial = f.permissions();
+	REQUIRE(initial);
+#ifdef _WIN32
+	CHECK(!initial->read_only);
+	REQUIRE(f.set_permissions(file_permissions{ .read_only = true }));
+	REQUIRE(f.permissions());
+	CHECK(f.permissions()->read_only);
+	REQUIRE(f.set_permissions(file_permissions{ .read_only = false })); // Clear it back so that the file can be deleted
+	CHECK(!f.permissions()->read_only);
+#else
+	REQUIRE(f.set_permissions(file_permissions{ .mode = 0754 }));
+	CHECK(f.permissions()->mode == 0754);
+	REQUIRE(f.set_permissions(file_permissions{ .mode = 0100644 })); // File-type bits from a raw st_mode are masked away
+	CHECK(f.permissions()->mode == 0644);
+	REQUIRE(f.set_permissions(file_permissions{ .mode = 0600 }));
+	CHECK(f.permissions()->mode == 0600);
+#endif
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("handle-based set_times - empty and unsupported requests succeed and change nothing", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, "x", 1));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite));
+
+	entry_times known;
+	known.last_access = timestamp{ .seconds = 1'500'000'000, .nanoseconds = 250'000'000 };
+	known.last_write = timestamp{ .seconds = 1'600'000'000, .nanoseconds = 500'000'000 };
+	REQUIRE(f.set_times(known));
+	const auto before = f.times();
+	REQUIRE(before);
+
+	REQUIRE(f.set_times(entry_times{})); // Nothing requested
+	if constexpr (!creation_time_settable)
+	{
+		entry_times creationOnly;
+		creationOnly.creation = timestamp{ .seconds = 1'400'000'000, .nanoseconds = 0 };
+		REQUIRE(f.set_times(creationOnly)); // Silently ignored where the platform cannot write it
+	}
+
+	const auto after = f.times();
+	REQUIRE(after);
+	CHECK(after->creation == before->creation);
+	CHECK(after->last_access == before->last_access);
+	CHECK(after->last_write == before->last_write);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("handle-based metadata reads work on a read-only open", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, "x", 1));
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
+
+	const auto times = f.times();
+	REQUIRE(times);
+	CHECK(times->last_write);
+	REQUIRE(f.permissions());
+
+	entry_times someTime;
+	someTime.last_write = timestamp{ .seconds = 1'600'000'000, .nanoseconds = 0 };
+	REQUIRE_WIN(!f.set_times(someTime)); // A read-only open carries no FILE_WRITE_ATTRIBUTES access
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("handle-based metadata calls on a closed file", "[file]")
+{
+	file f;
+	CHECK(!f.times());
+	CHECK(!f.permissions());
+
+	entry_times someTime;
+	someTime.last_write = timestamp{ .seconds = 1'600'000'000, .nanoseconds = 0 };
+	CHECK(!f.set_times(someTime));
+	CHECK(f.set_times(entry_times{})); // Requesting nothing succeeds without touching the handle, like the path-based contract
+
+#ifdef _WIN32
+	CHECK(!f.set_permissions(file_permissions{ .read_only = true }));
+#else
+	CHECK(!f.set_permissions(file_permissions{ .mode = 0644 }));
+#endif
+}
+
 TEST_CASE("Factory method", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";

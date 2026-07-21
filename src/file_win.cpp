@@ -1,5 +1,6 @@
 #include "file_win.hpp"
 #include "enum_helpers.hpp"
+#include "timestamp_win.hpp"
 #include "windows_path_win.hpp"
 
 ENABLE_ENUM_ARITHMETIC(thin_io::file_constants::access_mode);
@@ -183,6 +184,65 @@ std::optional<uint64_t> file_impl::size() const noexcept
 	LARGE_INTEGER li;
 	return ::GetFileSizeEx(_h, &li) != FALSE ?
 			static_cast<uint64_t>(li.QuadPart): std::optional<uint64_t>{};
+}
+
+std::optional<entry_times> file_impl::times() const noexcept
+{
+	FILE_BASIC_INFO info;
+	if (::GetFileInformationByHandleEx(_h, FileBasicInfo, &info, sizeof(info)) == 0) [[unlikely]]
+		return {};
+
+	entry_times times;
+	times.creation = fromFileTimeTicks(static_cast<uint64_t>(info.CreationTime.QuadPart));
+	times.last_access = fromFileTimeTicks(static_cast<uint64_t>(info.LastAccessTime.QuadPart));
+	times.last_write = fromFileTimeTicks(static_cast<uint64_t>(info.LastWriteTime.QuadPart));
+	return times;
+}
+
+bool file_impl::set_times(const entry_times& times) noexcept
+{
+	if (!times.creation && !times.last_access && !times.last_write)
+		return true;
+
+	return setFileTimes(_h, times);
+}
+
+// Requires a handle with FILE_WRITE_ATTRIBUTES access, which GENERIC_WRITE includes
+[[nodiscard]] static bool updateAttributeFlag(const HANDLE fileHandle, const DWORD flag, const bool enable) noexcept
+{
+	FILE_BASIC_INFO info;
+	if (::GetFileInformationByHandleEx(fileHandle, FileBasicInfo, &info, sizeof(info)) == 0) [[unlikely]]
+		return false;
+
+	const DWORD oldAttributes = info.FileAttributes;
+	DWORD newAttributes = enable ? (oldAttributes | flag) : (oldAttributes & ~flag);
+	if (newAttributes == oldAttributes)
+		return true;
+	if (newAttributes == 0)
+		newAttributes = FILE_ATTRIBUTE_NORMAL; // 0 would mean "leave the attributes unchanged"
+
+	FILE_BASIC_INFO update{}; // Zeroed timestamps are left untouched by the API
+	update.FileAttributes = newAttributes;
+	return ::SetFileInformationByHandle(fileHandle, FileBasicInfo, &update, sizeof(update)) != 0;
+}
+
+std::optional<file_permissions> file_impl::permissions() const noexcept
+{
+	FILE_BASIC_INFO info;
+	if (::GetFileInformationByHandleEx(_h, FileBasicInfo, &info, sizeof(info)) == 0) [[unlikely]]
+		return {};
+
+	return file_permissions{ .read_only = (info.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0 };
+}
+
+bool file_impl::set_permissions(const file_permissions permissions) noexcept
+{
+	return updateAttributeFlag(_h, FILE_ATTRIBUTE_READONLY, permissions.read_only);
+}
+
+bool file_impl::set_hidden(const bool hidden) noexcept
+{
+	return updateAttributeFlag(_h, FILE_ATTRIBUTE_HIDDEN, hidden);
 }
 
 std::optional<uint64_t> file_impl::pos() const noexcept
