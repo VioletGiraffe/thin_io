@@ -1,6 +1,7 @@
 #pragma once
 #include "file_interface.hpp"
 
+#include <utility>
 #include <vector>
 
 namespace thin_io {
@@ -62,7 +63,9 @@ private:
 	int _fd = -1;
 };
 
-inline file_impl::file_impl(file_impl &&other) noexcept : _fd{other._fd} {
+inline file_impl::file_impl(file_impl &&other) noexcept
+	: _memoryMappings{std::move(other._memoryMappings)}, _fd{other._fd}
+{
 	other._fd = -1;
 }
 
@@ -74,6 +77,7 @@ inline file_impl::~file_impl() noexcept
 inline file_impl& file_impl::operator=(file_impl&& other) noexcept
 {
 	close();
+	_memoryMappings = std::move(other._memoryMappings);
 	_fd = other._fd;
 	other._fd = -1;
 	return *this;

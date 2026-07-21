@@ -668,6 +668,84 @@ TEST_CASE("mmap - write", "[file]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("mmap - offset past the first page", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char marker[] = "marker";
+	static constexpr uint64_t offset = 100 * 1024 + 15; // Past any supported page size, and not page-aligned
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::CreateOrTruncate));
+	REQUIRE(f.resize(offset + sizeof(marker)));
+
+	SECTION("read") {
+		REQUIRE(f.pwrite(marker, sizeof(marker), offset) == sizeof(marker));
+		auto* addr = f.mmap(file::mmap_access_mode::ReadOnly, offset, sizeof(marker));
+		REQUIRE(addr);
+		REQUIRE(::memcmp(addr, marker, sizeof(marker)) == 0);
+		REQUIRE(f.unmap(addr));
+	}
+
+	SECTION("write") {
+		auto* addr = f.mmap(file::mmap_access_mode::ReadWrite, offset, sizeof(marker));
+		REQUIRE(addr);
+		::memcpy(addr, marker, sizeof(marker));
+		REQUIRE(f.unmap(addr));
+
+		char buf[sizeof(marker)];
+		::memset(buf, 0, sizeof(buf));
+		REQUIRE(f.pread(buf, sizeof(marker), offset) == sizeof(marker));
+		REQUIRE(::memcmp(buf, marker, sizeof(marker)) == 0);
+	}
+
+	REQUIRE(f.size() == offset + sizeof(marker)); // Mapping the tail of the file must not have grown it
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("mmap - mappings survive moving the file object", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	static constexpr auto size = sizeof(testString);
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, testString, size));
+
+	file moved;
+	void* addr = nullptr;
+	{
+		file original;
+		REQUIRE(original.open(testFilePath, file::access_mode::ReadWrite));
+		addr = original.mmap(file::mmap_access_mode::ReadWrite, 0, size);
+		REQUIRE(addr);
+		static_cast<char*>(addr)[0] = 'X';
+
+		SECTION("move construction") {
+			file constructed{std::move(original)};
+			moved = std::move(constructed);
+		}
+		SECTION("move assignment") {
+			moved = std::move(original);
+		}
+		REQUIRE(!original.is_open());
+		REQUIRE(moved.is_open());
+	} // The moved-from object is destroyed here; the mapping must remain owned by 'moved'
+
+	REQUIRE(moved.unmap(addr));
+	REQUIRE(moved.close());
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
+	char buf[size];
+	::memset(buf, 0, size);
+	REQUIRE(f.read(buf, size) == size);
+	REQUIRE(buf[0] == 'X');
+	REQUIRE(::memcmp(buf + 1, testString + 1, size - 1) == 0);
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("Factory method", "[file]")
 {
 	static constexpr const char testFilePath[] = "test.file";

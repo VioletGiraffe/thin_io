@@ -1,5 +1,6 @@
 #include "file_linux.hpp"
 
+#include <assert.h>
 #include <errno.h>
 #include <string.h> // strerror
 
@@ -244,6 +245,8 @@ bool file_impl::fdatasync() noexcept
 
 void* file_impl::mmap(mmap_access_mode mode, const uint64_t offset, const uint64_t length) noexcept
 {
+	assert(is_open()); // Not required for correctness here (::mmap fails on a bad descriptor), but loud in debug like the Windows version
+
 	// Offset must be a multiple of page size!
 	auto actualOffset = offset;
 	if (offset != 0) [[unlikely]]

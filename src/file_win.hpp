@@ -2,6 +2,7 @@
 #include "file_interface.hpp"
 
 #include <stddef.h>
+#include <utility>
 #include <vector>
 
 using HANDLE = void*;
@@ -85,7 +86,9 @@ private:
 	HANDLE _h = invalid_handle;
 };
 
-inline file_impl::file_impl(file_impl &&other) noexcept : _h{other._h} {
+inline file_impl::file_impl(file_impl &&other) noexcept
+	: _memoryMappings{std::move(other._memoryMappings)}, _h{other._h}
+{
 	other._h = invalid_handle;
 }
 
@@ -97,6 +100,7 @@ inline file_impl::~file_impl() noexcept
 inline file_impl& file_impl::operator=(file_impl&& other) noexcept
 {
 	close();
+	_memoryMappings = std::move(other._memoryMappings);
 	_h = other._h;
 	other._h = invalid_handle;
 	return *this;

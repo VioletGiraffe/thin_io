@@ -57,6 +57,14 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 	return cacheMode == file_constants::sys_cache_mode::CachingEnabled ? FILE_ATTRIBUTE_NORMAL : FILE_FLAG_NO_BUFFERING;
 }
 
+// ReadFile / WriteFile take a 32-bit byte count; an oversized request is clamped and completes as a partial transfer,
+// which callers must handle anyway. The clamp is 64 KiB-aligned so aligned no-buffering I/O stays aligned.
+[[nodiscard]] inline constexpr DWORD requestableIoSize(const uint64_t size) noexcept
+{
+	constexpr DWORD maxRequestSize = 0xFFFF'0000u;
+	return size < maxRequestSize ? static_cast<DWORD>(size) : maxRequestSize;
+}
+
 bool file_impl::open(const char* path, const access_mode accessMode, const open_disposition disposition,
 					 sys_cache_mode cacheMode, sharing_mode sharingMode) noexcept
 {
@@ -133,14 +141,14 @@ bool file_impl::close() noexcept
 std::optional<uint64_t> file_impl::read(void *dest, uint64_t size) noexcept
 {
 	DWORD bytesRead = 0;
-	return ::ReadFile(_h, dest, (DWORD)size, &bytesRead, nullptr) ?
+	return ::ReadFile(_h, dest, requestableIoSize(size), &bytesRead, nullptr) ?
 			bytesRead : std::optional<uint64_t>{};
 }
 
 std::optional<uint64_t> file_impl::write(const void *src, uint64_t size) noexcept
 {
 	DWORD bytesWritten = 0;
-	return ::WriteFile(_h, src, (DWORD)size, &bytesWritten, nullptr) ?
+	return ::WriteFile(_h, src, requestableIoSize(size), &bytesWritten, nullptr) ?
 				bytesWritten : std::optional<uint64_t>{};
 }
 
@@ -154,7 +162,7 @@ std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos
 
 	o.OffsetHigh = static_cast<DWORD>(pos >> 32);
 	o.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFu);
-	return ::ReadFile(_h, dest, (DWORD)size, &bytesRead, &o) ?
+	return ::ReadFile(_h, dest, requestableIoSize(size), &bytesRead, &o) ?
 			bytesRead : std::optional<uint64_t>{};
 }
 
@@ -168,7 +176,7 @@ std::optional<uint64_t> file_impl::pwrite(const void *src, uint64_t size, uint64
 
 	o.OffsetHigh = static_cast<DWORD>(pos >> 32);
 	o.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFu);
-	return ::WriteFile(_h, src, (DWORD)size, &bytesWritten, &o) ?
+	return ::WriteFile(_h, src, requestableIoSize(size), &bytesWritten, &o) ?
 			bytesWritten : std::optional<uint64_t>{};
 }
 
@@ -261,6 +269,15 @@ bool file_impl::fdatasync() noexcept
 
 void* file_impl::mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) noexcept
 {
+	// Guard required: CreateFileMapping interprets INVALID_HANDLE_VALUE as a request for a pagefile-backed
+	// anonymous mapping, so without it mapping a closed file would silently succeed.
+	assert(is_open());
+	if (!is_open()) [[unlikely]]
+	{
+		::SetLastError(ERROR_INVALID_HANDLE);
+		return nullptr;
+	}
+
 	uint64_t actualOffset = offset;
 	if (offset != 0)
 	{
@@ -280,12 +297,14 @@ void* file_impl::mmap(mmap_access_mode mode, uint64_t offset, uint64_t length) n
 	const uint64_t actualLength = length + offsetDifference;
 
 	const DWORD protectFlag = mode == mmap_access_mode::ReadOnly ? PAGE_READONLY : PAGE_READWRITE;
+	// The mapping object size is measured from the start of the file, so it must span through the end of the view.
+	const uint64_t mappingSize = actualOffset + actualLength;
 	HANDLE fileMappingHandle = ::CreateFileMappingA(
 		_h,
 		nullptr,
 		protectFlag,
-		static_cast<DWORD>(actualLength >> 32),
-		static_cast<DWORD>(actualLength & 0xFFFFFFFFu),
+		static_cast<DWORD>(mappingSize >> 32),
+		static_cast<DWORD>(mappingSize & 0xFFFFFFFFu),
 		nullptr
 	);
 
