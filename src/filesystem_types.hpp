@@ -62,6 +62,9 @@ enum class entry_kind : uint8_t {
 };
 
 struct entry_attributes {
+	// When is_link is set and links were not followed, kind describes the link entry itself, and the
+	// platforms differ: Windows reports the link's own directory bit (a junction or directory symlink
+	// is `directory`), while a POSIX symlink is always `other`.
 	entry_kind kind = entry_kind::unknown;
 	bool is_link = false; // POSIX symbolic link or Windows reparse point.
 	bool sparse = false;
