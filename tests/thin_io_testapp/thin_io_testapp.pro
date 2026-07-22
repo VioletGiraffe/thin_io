@@ -78,8 +78,7 @@ SOURCES += \
 	test_filesystem_error.cpp \
 	test_filesystem_space.cpp \
 	test_filesystem_types.cpp \
-	test_fs.cpp \
-	tests_main.cpp
+	test_fs.cpp
 
 win*:SOURCES += \
 	test_file_win.cpp \
