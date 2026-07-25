@@ -66,8 +66,15 @@ TEST_CASE("Windows path preparation normalizes ordinary absolute path components
 	CHECK(preparePath(R"(C:\folder\.\child\..\file.txt)") == LR"(\\?\C:\folder\file.txt)");
 	CHECK(preparePath(R"(C:\..\file.txt)") == LR"(\\?\C:\file.txt)");
 	CHECK(preparePath(R"(\\server\share\folder\..\..\file.txt)") == LR"(\\?\UNC\server\share\file.txt)");
-	CHECK(preparePath("C:\\folder. \\file... ") == LR"(\\?\C:\folder\file)");
-	CHECK(preparePath(R"(C:\folder\...\file.txt)") == LR"(\\?\C:\folder\file.txt)"); // An all-periods component trims to nothing
+}
+
+// Win32 would strip trailing spaces and periods; the extended prefix exists precisely to reach the names it cannot.
+TEST_CASE("Windows path preparation keeps component names verbatim", "[windows-path]")
+{
+	CHECK(preparePath(R"(C:\folder. \file... )") == LR"(\\?\C:\folder. \file... )");
+	CHECK(preparePath(R"(C:\folder\...\file.txt)") == LR"(\\?\C:\folder\...\file.txt)");
+	CHECK(preparePath(R"(C:\folder\.. \file.txt)") == LR"(\\?\C:\folder\.. \file.txt)"); // ".. " is a name, not a parent reference
+	CHECK(preparePath(R"(\\server\share\folder. \file)") == LR"(\\?\UNC\server\share\folder. \file)");
 }
 
 TEST_CASE("Windows path preparation leaves already extended paths opaque", "[windows-path]")

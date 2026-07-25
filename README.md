@@ -27,7 +27,8 @@ process-wide long-path policy:
 - `C:\data\file.bin` becomes `\\?\C:\data\file.bin`.
 - `\\server\share\file.bin` becomes `\\?\UNC\server\share\file.bin`.
 - Repeated separators are collapsed, `.` and `..` components are resolved without moving above the drive or share
-  root, trailing spaces and periods are removed from ordinary components, and one trailing separator is retained.
+  root, and one trailing separator is retained. Every other component is taken verbatim: unlike Win32, trailing
+  spaces and periods are not stripped, so entries carrying them stay addressable.
 
 Relative paths, drive-relative paths such as `C:file.bin`, and rooted paths without a drive remain unprefixed so
 Win32 resolves them in their normal context. These non-absolute paths do not otherwise receive lexical normalization.

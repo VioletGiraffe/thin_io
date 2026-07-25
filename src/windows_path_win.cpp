@@ -58,13 +58,6 @@ static constexpr size_t extendedUncPrefixLength = std::size(extendedUncPrefix) -
 	return true;
 }
 
-[[nodiscard]] size_t trimTrailingSpaces(const wchar_t* const path, const size_t start, size_t end) noexcept
-{
-	while (end > start && path[end - 1] == L' ')
-		--end;
-	return end;
-}
-
 [[nodiscard]] size_t trimTrailingSpacesAndPeriods(const wchar_t* const path, const size_t start, size_t end) noexcept
 {
 	while (end > start && (path[end - 1] == L' ' || path[end - 1] == L'.'))
@@ -93,6 +86,9 @@ void removePreviousComponent(wchar_t* const path, size_t& writeOffset, const siz
 		--writeOffset;
 }
 
+// Only exactly "." and ".." are path syntax; every other component is taken verbatim. Win32 would additionally strip
+// trailing spaces and periods, which leaves entries that carry them unreachable and, where a sibling exists under the
+// stripped name, silently redirects the operation onto it.
 [[nodiscard]] size_t normalizePathComponents(wchar_t* const path, const size_t inputLength, size_t readOffset,
 										 size_t writeOffset, const size_t rootEnd, const bool trailingSeparator) noexcept
 {
@@ -101,22 +97,17 @@ void removePreviousComponent(wchar_t* const path, size_t& writeOffset, const siz
 	size_t componentEnd = 0;
 	while (readNextComponent(path, inputLength, readOffset, componentStart, componentEnd))
 	{
-		const size_t withoutTrailingSpaces = trimTrailingSpaces(path, componentStart, componentEnd);
-		if (isComponent(path, componentStart, withoutTrailingSpaces, L"."))
+		if (isComponent(path, componentStart, componentEnd, L"."))
 			continue;
-		if (isComponent(path, componentStart, withoutTrailingSpaces, L".."))
+		if (isComponent(path, componentStart, componentEnd, L".."))
 		{
 			removePreviousComponent(path, writeOffset, rootEnd);
 			continue;
 		}
 
-		const size_t normalizedEnd = trimTrailingSpacesAndPeriods(path, componentStart, withoutTrailingSpaces);
-		if (normalizedEnd == componentStart)
-			continue;
-
 		if (path[writeOffset - 1] != L'\\')
 			path[writeOffset++] = L'\\';
-		copyComponent(path, componentStart, normalizedEnd, writeOffset);
+		copyComponent(path, componentStart, componentEnd, writeOffset);
 	}
 
 	if (trailingSeparator && path[writeOffset - 1] != L'\\')
@@ -240,6 +231,8 @@ void windows_path_buffer::prepare() noexcept
 		return;
 	}
 
+	// Unlike the filesystem components below, a host or share name cannot legitimately carry trailing spaces or
+	// periods, so trimming them here loses no reachable name and is what rejects malformed input like "\\..\share".
 	componentEnd = trimTrailingSpacesAndPeriods(_path.data(), componentStart, componentEnd);
 	if (componentEnd == componentStart) [[unlikely]]
 	{
