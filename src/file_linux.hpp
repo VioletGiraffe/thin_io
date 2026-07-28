@@ -46,6 +46,7 @@ public:
 
 
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept;
+	[[nodiscard]] std::optional<bool> is_regular_file() const noexcept;
 
 	[[nodiscard]] std::optional<entry_times> times() const noexcept;
 	[[nodiscard]] bool set_times(const entry_times& times) noexcept;

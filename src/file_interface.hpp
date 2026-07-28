@@ -9,6 +9,7 @@
 namespace thin_io {
 
 struct file_constants {
+	// POSIX Read opens carry O_NONBLOCK so opening a FIFO cannot wait for a writer; regular files are unaffected.
 	enum class access_mode {Read = 1, Write = 2, ReadWrite = 3};
 	// Existence handling is independent of access. CreateNew is an atomic exclusive create; CreateOrTruncate requires
 	// write access. Existing contents are preserved by OpenExisting, OpenOrCreate, and a failed CreateNew.
@@ -202,6 +203,13 @@ public:
 	[[nodiscard]] inline std::optional<uint64_t> size() const noexcept {
 		return _impl.size();
 	}
+
+#ifndef _WIN32
+	// Queries the opened descriptor rather than a path; nullopt means it could not be inspected.
+	[[nodiscard]] inline std::optional<bool> is_regular_file() const noexcept {
+		return _impl.is_regular_file();
+	}
+#endif
 
 	// Returns true when the current position is at or past the logical end of file. Returns false if either value cannot
 	// be queried.

@@ -46,7 +46,7 @@ bool file_impl::open(const char* path, const access_mode accessMode, const open_
 	int flags = O_LARGEFILE;
 	switch (accessMode) {
 	case access_mode::Read:
-		flags |= O_RDONLY;
+		flags |= O_RDONLY | O_NONBLOCK;
 		break;
 	case access_mode::Write:
 		flags |= O_WRONLY;
@@ -140,6 +140,14 @@ std::optional<uint64_t> file_impl::size() const noexcept
 	struct stat64 s;
 	if (::fstat64(_fd, &s) == 0)
 		return static_cast<uint64_t>(s.st_size);
+	return {};
+}
+
+std::optional<bool> file_impl::is_regular_file() const noexcept
+{
+	struct stat64 info;
+	if (::fstat64(_fd, &info) == 0)
+		return S_ISREG(info.st_mode);
 	return {};
 }
 
