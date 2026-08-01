@@ -52,7 +52,7 @@ jobs:
         clang --version
         pushd tests
         $QT_ROOT_DIR/bin/qmake -r
-        make -j
+        make -j4
 
     - name: Linux
       if: startsWith(matrix.os, 'ubuntu')
@@ -61,7 +61,7 @@ jobs:
         g++ --version
         pushd tests
         $QT_ROOT_DIR/bin/qmake -r
-        make -j
+        make -j$(nproc)
 
     - name: Test run
       if: startsWith(matrix.os, 'macos')
