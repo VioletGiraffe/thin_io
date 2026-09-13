@@ -16,7 +16,7 @@ using namespace thin_io;
 
 static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); // Empty base optimiation test
 
-[[nodiscard]] inline constexpr DWORD accessMask(file_constants::access_mode mode)
+[[nodiscard]] static inline constexpr DWORD accessMask(file_constants::access_mode mode)
 {
 	DWORD access = 0;
 	if (mode & file_constants::access_mode::Read)
@@ -27,7 +27,7 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 	return access;
 }
 
-[[nodiscard]] inline constexpr DWORD creationDisposition(file_constants::open_disposition disposition)
+[[nodiscard]] static inline constexpr DWORD creationDisposition(file_constants::open_disposition disposition)
 {
 	switch (disposition)
 	{
@@ -44,7 +44,7 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 	return OPEN_EXISTING;
 }
 
-[[nodiscard]] inline constexpr DWORD shareMask(file_constants::access_mode accessMode, file_constants::sharing_mode sharing)
+[[nodiscard]] static inline constexpr DWORD shareMask(file_constants::access_mode accessMode, file_constants::sharing_mode sharing)
 {
 	if (sharing == file_constants::sharing_mode::Default)
 		return accessMode == file_constants::access_mode::Read ? (FILE_SHARE_READ | FILE_SHARE_WRITE) : FILE_SHARE_READ;
@@ -52,14 +52,14 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 	return static_cast<DWORD>(sharing);
 }
 
-[[nodiscard]] inline constexpr DWORD flags(file_constants::sys_cache_mode cacheMode)
+[[nodiscard]] static inline constexpr DWORD flags(file_constants::sys_cache_mode cacheMode)
 {
 	return cacheMode == file_constants::sys_cache_mode::CachingEnabled ? FILE_ATTRIBUTE_NORMAL : FILE_FLAG_NO_BUFFERING;
 }
 
 // ReadFile / WriteFile take a 32-bit byte count; an oversized request is clamped and completes as a partial transfer,
 // which callers must handle anyway. The clamp is 64 KiB-aligned so aligned no-buffering I/O stays aligned.
-[[nodiscard]] inline constexpr DWORD requestableIoSize(const uint64_t size) noexcept
+[[nodiscard]] static inline constexpr DWORD requestableIoSize(const uint64_t size) noexcept
 {
 	constexpr DWORD maxRequestSize = 0xFFFF'0000u;
 	return size < maxRequestSize ? static_cast<DWORD>(size) : maxRequestSize;
