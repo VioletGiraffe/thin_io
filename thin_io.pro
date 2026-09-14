@@ -27,6 +27,12 @@ OBJECTS_DIR = ../build/$${OUTPUT_DIR}
 *msvc*{
 	QMAKE_CXXFLAGS += /Zi
 	Debug:QMAKE_CXXFLAGS += /JMC
+	QMAKE_CXXFLAGS += /we4715 /we4716 # not all control paths return a value / must return a value
+	QMAKE_CXXFLAGS += /we4172         # returning address of local variable or temporary
+	QMAKE_CXXFLAGS += /we4700         # uninitialized local variable used
+	QMAKE_CXXFLAGS += /we4477         # printf format string does not match the argument
+	QMAKE_CXXFLAGS += /we4551         # function call missing argument list
+	QMAKE_CXXFLAGS += /we4552 /we4553 # operator has no effect; did you intend '='?
 }
 
 linux*|mac*|freebsd{
