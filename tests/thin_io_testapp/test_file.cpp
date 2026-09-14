@@ -519,7 +519,7 @@ catch (...) {
 }
 }
 
-bool createTestFile(const char* path, const char* contents, size_t size)
+static bool createTestFile(const char* path, const char* contents, size_t size)
 {
 	file f;
 	if (!f.open(path, file::access_mode::Write)) return false;

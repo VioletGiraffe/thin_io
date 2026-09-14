@@ -64,7 +64,7 @@ linux*|mac*|freebsd{
 }
 
 *g++*{
-	QMAKE_CXXFLAGS += -fconcepts -ggdb3 -fuse-ld=gold
+	QMAKE_CXXFLAGS += -fconcepts -ggdb3
 
 	#QMAKE_CXXFLAGS += -fsanitize=thread
 	#QMAKE_LFLAGS += -fsanitize=thread
