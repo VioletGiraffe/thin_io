@@ -25,6 +25,7 @@ OBJECTS_DIR = ../build/$${OUTPUT_DIR}
 
 !mac*:*g++*:QMAKE_CXXFLAGS += -fconcepts
 *msvc*{
+	QMAKE_CXXFLAGS += /Zi
 	Debug:QMAKE_CXXFLAGS += /JMC
 }
 
