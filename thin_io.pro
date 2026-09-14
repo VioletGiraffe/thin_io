@@ -23,15 +23,36 @@ Debug:OUTPUT_DIR=debug
 DESTDIR  = ../bin/$${OUTPUT_DIR}/
 OBJECTS_DIR = ../build/$${OUTPUT_DIR}
 
-!mac*:*g++*:QMAKE_CXXFLAGS += -fconcepts -std=c++2a
+!mac*:*g++*:QMAKE_CXXFLAGS += -fconcepts
 *msvc*{
 	Debug:QMAKE_CXXFLAGS += /JMC
 }
 
-mac*|linux*{
-	QMAKE_CXXFLAGS_WARN_ON *= -Wall -Wextra -Wdelete-non-virtual-dtor -Werror=duplicated-cond -Werror=duplicated-branches -Warith-conversion -Warray-bounds -Wattributes -Wcast-align -Wcast-qual -Wconversion -Wdate-time -Wduplicated-branches -Wendif-labels -Werror=overflow -Werror=return-type -Werror=shift-count-overflow -Werror=sign-promo -Werror=undef -Wextra -Winit-self -Wlogical-op -Wmissing-include-dirs -Wnull-dereference -Wpedantic -Wpointer-arith -Wredundant-decls -Wshadow -Wstrict-aliasing -Wstrict-aliasing=3 -Wuninitialized -Wunused-const-variable=2 -Wwrite-strings -Wlogical-op
-	QMAKE_CXXFLAGS_WARN_ON += -Wno-missing-include-dirs -Wno-undef
+linux*|mac*|freebsd{
+	QMAKE_CXXFLAGS += -pedantic-errors
+	QMAKE_CFLAGS += -pedantic-errors
+
+	QMAKE_CXXFLAGS_WARN_ON *= -Wall -Wextra -Wnon-virtual-dtor -Woverloaded-virtual -Wcast-qual -Wdouble-promotion
+	QMAKE_CXXFLAGS_WARN_ON *= -Wformat=2 -Wextra-semi -Wzero-as-null-pointer-constant -Wfloat-equal -Wredundant-decls -Wvla
+
+	QMAKE_CXXFLAGS *= -Werror=return-type -Werror=uninitialized -Werror=delete-non-virtual-dtor -Werror=address
+	QMAKE_CXXFLAGS *= -Werror=sizeof-pointer-div -Werror=sizeof-pointer-memaccess
+
+	contains(QMAKE_COMPILER, clang) {
+		QMAKE_CXXFLAGS_WARN_ON *= -Wshadow-all -Wcast-align -Wcomma -Wconditional-uninitialized -Wheader-hygiene -Wloop-analysis -Wextra-semi-stmt -Wunreachable-code-aggressive
+		QMAKE_CXXFLAGS_WARN_ON *= -Wshorten-64-to-32 -Wmissing-prototypes -Wmissing-variable-declarations -Wno-weak-vtables
+		QMAKE_CXXFLAGS *= -Werror=return-stack-address -Werror=infinite-recursion
+	} else {
+		QMAKE_CXXFLAGS_WARN_ON *= -Wshadow -Wcast-align=strict -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wnull-dereference
+		QMAKE_CXXFLAGS_WARN_ON *= -Wsuggest-override -Wnoexcept -Wmissing-declarations
+		QMAKE_CXXFLAGS *= -Werror=return-local-addr -Werror=memset-transposed-args -Werror=nonnull-compare -Werror=mismatched-new-delete -Werror=infinite-recursion
+		QMAKE_CXXFLAGS *= -Wcatch-value=3 -Werror=catch-value # -Werror=catch-value on its own would only enable level 1
+	}
+
+	Release:DEFINES += NDEBUG=1
+	Debug:DEFINES += _DEBUG
 }
+
 
 HEADERS += \
 	src/enum_helpers.hpp \
