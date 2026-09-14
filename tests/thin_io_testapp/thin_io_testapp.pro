@@ -48,7 +48,7 @@ linux*|mac*|freebsd{
 
 	contains(QMAKE_COMPILER, clang) {
 		QMAKE_CXXFLAGS_WARN_ON *= -Wshadow-all -Wcast-align -Wcomma -Wconditional-uninitialized -Wheader-hygiene -Wloop-analysis -Wextra-semi-stmt -Wunreachable-code-aggressive
-		QMAKE_CXXFLAGS_WARN_ON *= -Wshorten-64-to-32 -Wmissing-prototypes -Wmissing-variable-declarations -Wno-weak-vtables
+		QMAKE_CXXFLAGS_WARN_ON *= -Wshorten-64-to-32 -Wmissing-prototypes -Wmissing-variable-declarations
 		QMAKE_CXXFLAGS_WARN_ON *= -Wimplicit-fallthrough -Wsuggest-override
 		QMAKE_CXXFLAGS *= -Werror=return-stack-address -Werror=infinite-recursion
 	} else {
@@ -75,10 +75,7 @@ Release:LIB_PATH += $${PWD}/../../../bin/release
 
 LIBS += -L$${LIB_PATH} -lthin_io
 
-mac*|linux*{
-	QMAKE_CXXFLAGS_WARN_ON = -Wall -Wextra -Werror=duplicated-cond -Werror=duplicated-branches -Warith-conversion -Warray-bounds -Wattributes -Wcast-align -Wcast-qual -Wconversion -Wdate-time -Wduplicated-branches -Wendif-labels -Werror=overflow -Werror=return-type -Werror=shift-count-overflow -Werror=sign-promo -Werror=undef -Wextra -Winit-self -Wlogical-op -Wmissing-include-dirs -Wnull-dereference -Wpedantic -Wpointer-arith -Wredundant-decls -Wshadow -Wstrict-aliasing -Wstrict-aliasing=3 -Wuninitialized -Wunused-const-variable=2 -Wwrite-strings -Wlogical-op
-	QMAKE_CXXFLAGS_WARN_ON += -Wno-missing-include-dirs -Wno-undef
-
+mac*|linux*|freebsd*{
 	PRE_TARGETDEPS += $${LIB_PATH}/libthin_io.a
 }
 

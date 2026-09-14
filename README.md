@@ -120,4 +120,4 @@ Windows filesystem does not expose `FILE_ID_128` information.
 
 - The supplied build uses `qmake`; another build system only needs the common headers and the implementation files
   for its target platform.
-- The subrepository dependency is used only by the tests to provide Catch2.
+- Catch2, vendored in `3rdparty/`, is used only by the tests.
