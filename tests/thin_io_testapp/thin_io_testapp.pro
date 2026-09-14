@@ -20,7 +20,7 @@ UI_DIR      = ../build/$${OUTPUT_DIR}
 RCC_DIR     = ../build/$${OUTPUT_DIR}
 
 win*{
-	QMAKE_CXXFLAGS += /std:c++latest /permissive- /Zc:__cplusplus /Zc:char8_t
+	QMAKE_CXXFLAGS += /std:c++latest /permissive- /Zc:__cplusplus /Zc:char8_t /utf-8
 
 	QMAKE_CXXFLAGS += /MP /FS
 	QMAKE_CXXFLAGS += /wd4251
