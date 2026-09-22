@@ -214,7 +214,7 @@ template <class Character>
 		return std::unexpected{filesystem_error{ .native_code = searchPath.error_code() }};
 
 	WIN32_FIND_DATAW data{};
-	const HANDLE nativeHandle = ::FindFirstFileExW(searchPath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+	const HANDLE nativeHandle = ::FindFirstFileExW(searchPath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
 	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
 	{
 		const filesystem_error enumerationError = capture_last_filesystem_error();
