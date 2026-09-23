@@ -158,7 +158,7 @@ template<class Inode>
 	if (status.attributes.kind == entry_kind::regular_file && info.st_size >= 0)
 		status.logical_size = static_cast<uint64_t>(info.st_size);
 #ifdef __APPLE__
-	status.creation_time = fromTimespec(info.st_birthtimespec);
+	status.times.creation = fromTimespec(info.st_birthtimespec);
 	status.times.last_access = fromTimespec(info.st_atimespec);
 	status.times.last_write = fromTimespec(info.st_mtimespec);
 #else
@@ -183,7 +183,7 @@ template<class Inode>
 	if (status.attributes.kind == entry_kind::regular_file && (info.stx_mask & STATX_SIZE) != 0)
 		status.logical_size = info.stx_size;
 	if ((info.stx_mask & STATX_BTIME) != 0)
-		status.creation_time = fromStatxTimestamp(info.stx_btime);
+		status.times.creation = fromStatxTimestamp(info.stx_btime);
 	if ((info.stx_mask & STATX_ATIME) != 0)
 		status.times.last_access = fromStatxTimestamp(info.stx_atime);
 	if ((info.stx_mask & STATX_MTIME) != 0)

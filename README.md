@@ -133,7 +133,8 @@ Windows filesystem does not expose `FILE_ID_128` information.
 
 ## Building the library
 
-- The supplied build uses `qmake`; another build system only needs the common headers and the implementation files
-  for its target platform.
+- The supplied builds use `qmake` or CMake; another build system only needs the common headers and the implementation
+  files for its target platform.
+- `scripts/run_tests.bat` and `scripts/run_tests.sh` build the tests with CMake and run them, as CI does.
 - Depends on the header-only [cpp-template-utils](https://github.com/VioletGiraffe/cpp-template-utils), checked out
   beside thin_io as `../cpp-template-utils`. Its Catch2 copy is used by the tests.

@@ -127,7 +127,7 @@ TEST_CASE("Existing Windows APIs publish path preparation errors", "[windows-pat
 	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
 
 	entry_times times;
-	times.last_write = timestamp{};
+	times.last_write = timestamp{ .seconds = 1'600'000'000, .nanoseconds = 0 };
 	CHECK_FALSE(set_times(invalidUtf8.c_str(), times));
 	CHECK(file::error_code() == ERROR_NO_UNICODE_TRANSLATION);
 	CHECK_FALSE(set_times(static_cast<const wchar_t*>(nullptr), times));

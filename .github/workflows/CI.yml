@@ -2,12 +2,6 @@ name: CI
 
 on: [push, pull_request, workflow_dispatch]
 
-env:
-  # Configuration type to build.
-  # You can convert this to a build matrix if you need coverage of multiple configuration types.
-  # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-  BUILD_CONFIGURATION: Release
-
 jobs:
   build:
     name: Build & test on ${{ matrix.os }}
@@ -26,12 +20,11 @@ jobs:
     - name: Checkout dependencies
       run: git clone --depth 1 https://github.com/VioletGiraffe/cpp-template-utils ../cpp-template-utils
 
-    # CMAKE_BUILD_TYPE for single-config generators, --config / -C for Visual Studio
-    - name: Configure
-      run: cmake -S tests -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }}
+    - name: Build & test
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: scripts\run_tests.bat
 
-    - name: Build
-      run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
-
-    - name: Test run
-      run: ctest --test-dir build -C ${{ env.BUILD_CONFIGURATION }} -V --no-tests=error
+    - name: Build & test
+      if: runner.os != 'Windows'
+      run: scripts/run_tests.sh
