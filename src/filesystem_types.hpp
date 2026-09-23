@@ -68,10 +68,11 @@ struct entry_attributes {
 	// platforms differ: Windows reports the link's own directory bit (a junction or directory symlink
 	// is `directory`), while a POSIX symlink is always `other`.
 	entry_kind kind = entry_kind::unknown;
-	bool is_link = false; // POSIX symbolic link or Windows reparse point.
-	bool sparse = false;
-	bool compressed = false;
-	bool hidden = false; // Windows FILE_ATTRIBUTE_HIDDEN, or UF_HIDDEN where the platform has it; never inferred from the name.
+	// Bit-fields: the flags share one byte, so the struct stays 8 bytes.
+	bool is_link : 1 = false; // POSIX symbolic link or Windows reparse point.
+	bool sparse : 1 = false;
+	bool compressed : 1 = false;
+	bool hidden : 1 = false; // Windows FILE_ATTRIBUTE_HIDDEN, or UF_HIDDEN where the platform has it; never inferred from the name.
 	uint32_t reparse_tag = 0; // Zero when the entry is not a Windows reparse point.
 
 	[[nodiscard]] bool operator==(const entry_attributes&) const noexcept = default;

@@ -35,6 +35,7 @@ function(thin_io_add_gcc_clang_options TARGET)
 			-Wsuggest-override -Wmissing-declarations -Wmismatched-tags -Wunused-const-variable=1
 			-Werror=return-local-addr -Werror=memset-transposed-args -Werror=nonnull-compare -Werror=mismatched-new-delete -Werror=infinite-recursion
 			-Wcatch-value=3 -Werror=catch-value # -Werror=catch-value on its own would only enable level 1
+			-Wno-maybe-uninitialized # False positives on std::optional and std::expected
 		)
 	endif()
 
