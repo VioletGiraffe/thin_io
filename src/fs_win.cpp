@@ -179,13 +179,19 @@ private:
 	return attributes;
 }
 
-// sizeHigh and sizeLow are ignored for anything but a regular file: a link's own size is not its target's.
+[[nodiscard]] bool isNameSurrogateLink(const entry_attributes& attributes) noexcept
+{
+	return attributes.is_link && IsReparseTagNameSurrogate(attributes.reparse_tag);
+}
+
+// sizeHigh and sizeLow are ignored for directories and links: a link's own size is not its target's.
+// Other reparse points, such as WOF-compressed or cloud placeholder files, report their own size.
 [[nodiscard]] entry_status statusFromWindows(const DWORD nativeAttributes, const DWORD reparseTag, const DWORD sizeHigh, const DWORD sizeLow,
 	const FILETIME& creation, const FILETIME& lastAccess, const FILETIME& lastWrite) noexcept
 {
 	entry_status status;
 	status.attributes = attributesFromWindows(nativeAttributes, reparseTag);
-	if (status.attributes.kind == entry_kind::regular_file && !status.attributes.is_link)
+	if (status.attributes.kind == entry_kind::regular_file && !isNameSurrogateLink(status.attributes))
 		status.logical_size = (static_cast<uint64_t>(sizeHigh) << 32) | sizeLow;
 	status.times = timesFromWindows(creation, lastAccess, lastWrite);
 	status.permissions = file_permissions{
@@ -203,11 +209,6 @@ private:
 		data.cFileName,
 		std::nullopt
 	};
-}
-
-[[nodiscard]] bool isNameSurrogateLink(const entry_attributes& attributes) noexcept
-{
-	return attributes.is_link && IsReparseTagNameSurrogate(attributes.reparse_tag);
 }
 
 // Follows the link at path. Absent when the target cannot be reached.
@@ -425,6 +426,37 @@ template <class Character>
 	return space;
 }
 
+// Reads the entry's own attributes, which needs no list access to its parent.
+// A reparse point's tag needs a handle, so a reparse point that cannot be opened fails.
+[[nodiscard]] filesystem_result<directory_entry> entryFromAttributes(const wchar_t* const path, native_string name)
+{
+	WIN32_FILE_ATTRIBUTE_DATA data;
+	if (::GetFileAttributesExW(path, GetFileExInfoStandard, &data) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+	if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+	{
+		const HANDLE nativeHandle = ::CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+		file_handle handle{nativeHandle};
+
+		if (::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &tagInfo, sizeof(tagInfo)) == 0) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+	}
+
+	directory_entry entry{
+		statusFromWindows(data.dwFileAttributes, tagInfo.ReparseTag, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime),
+		std::move(name),
+		std::nullopt
+	};
+	if (isNameSurrogateLink(entry.attributes))
+		entry.link_target = linkTargetStatus(path);
+	return entry;
+}
+
 template <class Character>
 [[nodiscard]] filesystem_result<directory_entry> getDirectoryEntry(const Character* path)
 {
@@ -432,19 +464,9 @@ template <class Character>
 	if (!nativePath) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
 
-	// FindFirstFileExW cannot find a root, which has no name in its parent; GetFileAttributesExW can.
+	// FindFirstFileExW cannot find a root, which has no name in its parent.
 	if (isRootPath({ nativePath.c_str(), nativePath.length() }))
-	{
-		WIN32_FILE_ATTRIBUTE_DATA data;
-		if (::GetFileAttributesExW(nativePath.c_str(), GetFileExInfoStandard, &data) == 0) [[unlikely]]
-			return std::unexpected{capture_last_filesystem_error()};
-
-		return directory_entry{
-			statusFromWindows(data.dwFileAttributes, 0, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime),
-			{},
-			std::nullopt
-		};
-	}
+		return entryFromAttributes(nativePath.c_str(), {});
 
 	nativePath.remove_trailing_separator();
 	const std::wstring_view preparedPath{ nativePath.c_str(), nativePath.length() };
@@ -457,7 +479,13 @@ template <class Character>
 	WIN32_FIND_DATAW data{};
 	const HANDLE nativeHandle = ::FindFirstFileExW(nativePath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
 	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
-		return std::unexpected{capture_last_filesystem_error()};
+	{
+		const filesystem_error error = capture_last_filesystem_error();
+		// The search needs list access to the parent
+		if (error.native_code == ERROR_ACCESS_DENIED)
+			return entryFromAttributes(nativePath.c_str(), native_string{ name });
+		return std::unexpected{error};
+	}
 
 	find_handle handle{nativeHandle};
 	if (const auto closeError = handle.close()) [[unlikely]]

@@ -13,7 +13,10 @@
 #include "windows_path_win.hpp"
 
 #include <Windows.h>
+#include <AclAPI.h>
 #include <winioctl.h>
+
+#pragma comment(lib, "advapi32.lib") // Security descriptor APIs
 
 #include <array>
 #include <cstddef>
@@ -468,6 +471,60 @@ public:
 	std::vector<std::wstring> directories;
 };
 
+// Denies the current user list access to one directory until destroyed.
+class list_access_denial final {
+public:
+	explicit list_access_denial(std::wstring directoryPath) : _path{std::move(directoryPath)}
+	{
+		if (::GetNamedSecurityInfoW(_path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &_originalAcl, nullptr,
+			&_originalDescriptor) != ERROR_SUCCESS)
+			return;
+
+		HANDLE token = nullptr;
+		if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token) == 0)
+			return;
+		std::array<std::byte, 256> userBuffer{};
+		DWORD userSize = 0;
+		const bool userRead = ::GetTokenInformation(token, TokenUser, userBuffer.data(), static_cast<DWORD>(userBuffer.size()), &userSize) != 0;
+		::CloseHandle(token);
+		if (!userRead)
+			return;
+
+		EXPLICIT_ACCESSW denial{};
+		denial.grfAccessPermissions = FILE_LIST_DIRECTORY;
+		denial.grfAccessMode = DENY_ACCESS;
+		denial.grfInheritance = NO_INHERITANCE;
+		denial.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+		denial.Trustee.TrusteeType = TRUSTEE_IS_USER;
+		denial.Trustee.ptstrName = static_cast<LPWSTR>(reinterpret_cast<const TOKEN_USER*>(userBuffer.data())->User.Sid);
+
+		PACL deniedAcl = nullptr;
+		if (::SetEntriesInAclW(1, &denial, _originalAcl, &deniedAcl) != ERROR_SUCCESS)
+			return;
+		_applied = ::SetNamedSecurityInfoW(_path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, deniedAcl, nullptr) == ERROR_SUCCESS;
+		::LocalFree(deniedAcl);
+	}
+
+	~list_access_denial() noexcept
+	{
+		// The owner keeps the right to change the DACL, so the denial cannot lock this out.
+		if (_applied)
+			::SetNamedSecurityInfoW(_path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, _originalAcl, nullptr);
+		::LocalFree(_originalDescriptor);
+	}
+
+	list_access_denial(const list_access_denial&) = delete;
+	list_access_denial& operator=(const list_access_denial&) = delete;
+
+	[[nodiscard]] explicit operator bool() const noexcept { return _applied; }
+
+private:
+	std::wstring _path;
+	PSECURITY_DESCRIPTOR _originalDescriptor = nullptr;
+	PACL _originalAcl = nullptr; // Points into _originalDescriptor
+	bool _applied = false;
+};
+
 // The mount-point variant of REPARSE_DATA_BUFFER lives in the DDK's ntifs.h, not the SDK; mirror just that layout.
 struct mount_point_reparse_buffer final {
 	ULONG   ReparseTag;
@@ -712,6 +769,37 @@ TEST_CASE("Windows get_directory_entry reports a drive root and rejects wildcard
 	const auto wildcard = get_directory_entry("directory-entry-*");
 	REQUIRE_FALSE(wildcard);
 	CHECK(wildcard.error().native_code == ERROR_INVALID_NAME);
+}
+
+TEST_CASE("Windows get_directory_entry reports an entry whose parent cannot be listed", "[fs][directory][windows]")
+{
+	static constexpr char directoryPath[] = "directory-entry-unlisted";
+	static constexpr char filePath[] = "directory-entry-unlisted/File.bin";
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(filePath, "unlisted"));
+
+	const auto listable = get_directory_entry(filePath);
+	REQUIRE(listable);
+	{
+		const list_access_denial denial{ L"directory-entry-unlisted" };
+		REQUIRE(denial);
+		if (list_directory(directoryPath))
+		{
+			WARN("The test process can bypass the denial; unlisted-parent assertions skipped");
+		}
+		else
+		{
+			const auto unlisted = get_directory_entry("directory-entry-unlisted/file.bin");
+			REQUIRE(unlisted);
+			CHECK(unlisted->name == L"file.bin"); // The path's spelling: the filesystem's needs the listing
+			CHECK(static_cast<const entry_status&>(*unlisted) == static_cast<const entry_status&>(*listable));
+		}
+	}
+
+	REQUIRE(file::delete_file(filePath));
+	REQUIRE(removeDirectory(directoryPath));
 }
 
 TEST_CASE("Windows drive-relative enumeration lists the drive's current directory", "[fs][directory][windows]")

@@ -97,7 +97,8 @@ Resolving a link costs one extra query for that link only. It fills `link_target
 A link here is a POSIX symbolic link or a Windows name-surrogate reparse point: a symbolic link or a junction.
 
 `get_directory_entry()` reports one path the way a `full` listing reports an entry, without opening it. On Windows
-it reads the find data, so it also works for entries that cannot be opened, such as the paging file.
+it reads the find data, so it also works for entries that cannot be opened, such as the paging file. Where the parent
+directory cannot be listed, it reads the entry's own attributes instead.
 
 ### Detailed entry metadata
 

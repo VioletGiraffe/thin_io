@@ -39,7 +39,8 @@ namespace thin_io {
 // Reports one entry as list_directory() does with listing_detail::full, without opening it: works for entries that
 // cannot be opened, such as a Windows paging file. A trailing separator is ignored.
 // name is empty for a root. Otherwise it is the path's last component on POSIX, and the filesystem's spelling on Windows.
-// Windows: requires list access to the parent directory, except for a root; wildcard characters in the name fail.
+// Windows: wildcard characters in the name fail.
+// Windows, parent not listable: name is the path's last component, and a reparse point must be openable.
 [[nodiscard]] filesystem_result<directory_entry> get_directory_entry(const char* path);
 #ifdef _WIN32
 [[nodiscard]] filesystem_result<directory_entry> get_directory_entry(const wchar_t* path);
