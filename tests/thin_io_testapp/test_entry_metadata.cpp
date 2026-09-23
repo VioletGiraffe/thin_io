@@ -1,4 +1,4 @@
-#include "catch2/catch.hpp"
+#include "catch_thin_io.hpp"
 
 #include "file.hpp"
 #include "fs.hpp"

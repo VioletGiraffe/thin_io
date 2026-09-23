@@ -1,4 +1,4 @@
-#include "catch2/catch.hpp"
+#include "catch_thin_io.hpp"
 
 #include "file.hpp"
 #include "fs.hpp"
@@ -344,7 +344,10 @@ TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs
 	// A trailing separator would resolve the link; it is ignored instead
 	const auto singleDirectoryLink = get_directory_entry("list-directory-posix-types/dir-link/");
 	REQUIRE(singleDirectoryLink);
-	CHECK(*singleDirectoryLink == *detailedDirectoryLink);
+	// Linux updates a symlink's access time when following it, which the full listing has already done
+	directory_entry expectedDirectoryLink = *detailedDirectoryLink;
+	expectedDirectoryLink.times.last_access = singleDirectoryLink->times.last_access;
+	CHECK(*singleDirectoryLink == expectedDirectoryLink);
 	const auto singleDanglingLink = get_directory_entry(danglingLinkPath);
 	REQUIRE(singleDanglingLink);
 	CHECK(singleDanglingLink->attributes.is_link);
