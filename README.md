@@ -79,10 +79,24 @@ bool/optional results and native last-error access for compatibility.
 relative to the listed directory in `native_string`, and never returns a partial vector as a successful result. On
 Windows the names are UTF-16; on POSIX they preserve the bytes supplied by the filesystem.
 
-Each `directory_entry` contains its basic kind and the cheaply available sparse, compressed, and link/reparse
+Each `directory_entry` contains its basic kind and the cheaply available sparse, compressed, hidden, and link/reparse
 attributes. `is_link` is true for POSIX symbolic links and Windows reparse points; `reparse_tag` retains the exact
-Windows tag and is zero otherwise. `logical_size` is optional because directory enumeration does not provide it
-reliably on every platform.
+Windows tag and is zero otherwise. `hidden` is the operating system's flag (`FILE_ATTRIBUTE_HIDDEN`, `UF_HIDDEN`), never
+a naming convention.
+
+Size, times and permissions are optional, because what the enumeration returns differs by platform.
+`listing_detail` selects how much is filled:
+
+| | Windows | POSIX |
+|---|---|---|
+| `basic` | everything the find data holds | the kind; a stat only for entries with no reported type |
+| `full` | also resolves links | one stat per entry, and resolves links |
+
+Resolving a link costs one extra query for that link only. It fills `link_target`, which is absent for a broken link.
+A link here is a POSIX symbolic link or a Windows name-surrogate reparse point: a symbolic link or a junction.
+
+`get_directory_entry()` reports one path the way a `full` listing reports an entry, without opening it. On Windows
+it reads the find data, so it also works for entries that cannot be opened, such as the paging file.
 
 ### Detailed entry metadata
 

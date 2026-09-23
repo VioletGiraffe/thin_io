@@ -69,15 +69,36 @@ struct entry_attributes {
 	bool is_link = false; // POSIX symbolic link or Windows reparse point.
 	bool sparse = false;
 	bool compressed = false;
+	bool hidden = false; // Windows FILE_ATTRIBUTE_HIDDEN, or UF_HIDDEN where the platform has it; never inferred from the name.
 	uint32_t reparse_tag = 0; // Zero when the entry is not a Windows reparse point.
 
 	[[nodiscard]] bool operator==(const entry_attributes&) const noexcept = default;
 };
 
-struct directory_entry {
-	native_string name; // Relative entry name, never a rebuilt absolute path.
+// What one query reports about one entry: the entry itself, or the target of a link.
+struct entry_status {
 	entry_attributes attributes;
-	std::optional<uint64_t> logical_size;
+	std::optional<uint64_t> logical_size; // Regular files only.
+	entry_times times;
+	std::optional<file_permissions> permissions;
+
+	[[nodiscard]] bool operator==(const entry_status&) const noexcept = default;
+};
+
+// basic is what the enumeration itself returns:
+//   Windows - every entry_status member;
+//   POSIX - the kind, and a stat only for an entry the directory reports no type for.
+// full adds one stat per entry on POSIX, and a target query per link on every platform.
+enum class listing_detail : uint8_t {
+	basic,
+	full
+};
+
+// A link here is a POSIX symbolic link or a Windows name-surrogate reparse point (symbolic link, junction).
+struct directory_entry : entry_status {
+	native_string name; // Relative entry name, never a rebuilt absolute path.
+	// listing_detail::full, links only: what the link resolves to. Absent when the target cannot be reached.
+	std::optional<entry_status> link_target;
 
 	[[nodiscard]] bool operator==(const directory_entry&) const noexcept = default;
 };

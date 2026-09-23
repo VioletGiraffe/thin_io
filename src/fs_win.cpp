@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -54,6 +55,11 @@ bool set_times(const wchar_t* path, const entry_times& times) noexcept
 	return setTimesForPath(path, times);
 }
 
+[[nodiscard]] static entry_times timesFromWindows(const FILETIME& creation, const FILETIME& lastAccess, const FILETIME& lastWrite) noexcept
+{
+	return entry_times{ .creation = fromFileTime(creation), .last_access = fromFileTime(lastAccess), .last_write = fromFileTime(lastWrite) };
+}
+
 [[nodiscard]] static std::optional<entry_times> getPreparedTimes(const wchar_t* path) noexcept
 {
 	// Reads the metadata without opening the path, so it works for directories and cannot perturb the access time
@@ -80,18 +86,10 @@ bool set_times(const wchar_t* path, const entry_times& times) noexcept
 			return {};
 		}
 
-		entry_times times;
-		times.creation = fromFileTime(info.ftCreationTime);
-		times.last_access = fromFileTime(info.ftLastAccessTime);
-		times.last_write = fromFileTime(info.ftLastWriteTime);
-		return times;
+		return timesFromWindows(info.ftCreationTime, info.ftLastAccessTime, info.ftLastWriteTime);
 	}
 
-	entry_times times;
-	times.creation = fromFileTime(attributes.ftCreationTime);
-	times.last_access = fromFileTime(attributes.ftLastAccessTime);
-	times.last_write = fromFileTime(attributes.ftLastWriteTime);
-	return times;
+	return timesFromWindows(attributes.ftCreationTime, attributes.ftLastAccessTime, attributes.ftLastWriteTime);
 }
 
 template <class Character>
@@ -174,8 +172,63 @@ private:
 	attributes.is_link = (nativeAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 	attributes.sparse = (nativeAttributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
 	attributes.compressed = (nativeAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
+	attributes.hidden = (nativeAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
 	attributes.reparse_tag = attributes.is_link ? reparseTag : 0;
 	return attributes;
+}
+
+// sizeHigh and sizeLow are ignored for anything but a regular file: a link's own size is not its target's.
+[[nodiscard]] entry_status statusFromWindows(const DWORD nativeAttributes, const DWORD reparseTag, const DWORD sizeHigh, const DWORD sizeLow,
+	const FILETIME& creation, const FILETIME& lastAccess, const FILETIME& lastWrite) noexcept
+{
+	entry_status status;
+	status.attributes = attributesFromWindows(nativeAttributes, reparseTag);
+	if (status.attributes.kind == entry_kind::regular_file && !status.attributes.is_link)
+		status.logical_size = (static_cast<uint64_t>(sizeHigh) << 32) | sizeLow;
+	status.times = timesFromWindows(creation, lastAccess, lastWrite);
+	status.permissions = file_permissions{
+		.read_only = (nativeAttributes & FILE_ATTRIBUTE_READONLY) != 0,
+		.hidden = status.attributes.hidden,
+		.system = (nativeAttributes & FILE_ATTRIBUTE_SYSTEM) != 0
+	};
+	return status;
+}
+
+[[nodiscard]] directory_entry entryFromFindData(const WIN32_FIND_DATAW& data)
+{
+	return directory_entry{
+		statusFromWindows(data.dwFileAttributes, data.dwReserved0, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime),
+		data.cFileName,
+		std::nullopt
+	};
+}
+
+[[nodiscard]] bool isNameSurrogateLink(const entry_attributes& attributes) noexcept
+{
+	return attributes.is_link && IsReparseTagNameSurrogate(attributes.reparse_tag);
+}
+
+// Follows the link at path. Absent when the target cannot be reached.
+[[nodiscard]] std::optional<entry_status> linkTargetStatus(const wchar_t* const path) noexcept
+{
+	const HANDLE nativeHandle = ::CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+	if (nativeHandle == INVALID_HANDLE_VALUE)
+		return {};
+	file_handle handle{nativeHandle};
+
+	BY_HANDLE_FILE_INFORMATION info;
+	if (::GetFileInformationByHandle(nativeHandle, &info) == 0) [[unlikely]]
+		return {};
+
+	// A target can itself be a reparse point, such as a cloud placeholder: its tag needs a separate query.
+	FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+	if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+		&& ::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &tagInfo, sizeof(tagInfo)) == 0) [[unlikely]]
+		return {};
+
+	return statusFromWindows(info.dwFileAttributes, tagInfo.ReparseTag, info.nFileSizeHigh, info.nFileSizeLow,
+		info.ftCreationTime, info.ftLastAccessTime, info.ftLastWriteTime);
 }
 
 [[nodiscard]] bool isDotEntry(const std::wstring_view name) noexcept
@@ -183,35 +236,41 @@ private:
 	return name == L"." || name == L"..";
 }
 
-[[nodiscard]] bool isUncShareRoot(const std::wstring_view path) noexcept
+// With or without one trailing separator.
+[[nodiscard]] bool isUncShareRoot(std::wstring_view path) noexcept
 {
 	static constexpr std::wstring_view extendedUncPrefix = LR"(\\?\UNC\)";
 	if (!path.starts_with(extendedUncPrefix))
 		return false;
 
+	if (path.ends_with(L'\\'))
+		path.remove_suffix(1);
 	const size_t serverEnd = path.find(L'\\', extendedUncPrefix.size());
 	return serverEnd != std::wstring_view::npos && serverEnd + 1 < path.size() && path.find(L'\\', serverEnd + 1) == std::wstring_view::npos;
 }
 
-void appendDirectoryEntry(std::vector<directory_entry>& entries, const WIN32_FIND_DATAW& data)
+// A prepared path naming a drive root, the current drive's root, or a UNC share root.
+[[nodiscard]] bool isRootPath(const std::wstring_view path) noexcept
 {
-	if (isDotEntry(data.cFileName))
-		return;
+	static constexpr std::wstring_view extendedPrefix = LR"(\\?\)";
+	const std::wstring_view drivePath = path.starts_with(extendedPrefix) ? path.substr(extendedPrefix.size()) : path;
+	if (drivePath == L"\\" || (drivePath.size() == 3 && drivePath[1] == L':' && drivePath[2] == L'\\'))
+		return true;
 
-	directory_entry entry;
-	entry.name = data.cFileName;
-	entry.attributes = attributesFromWindows(data.dwFileAttributes, data.dwReserved0);
-	if (entry.attributes.kind == entry_kind::regular_file && !entry.attributes.is_link)
-		entry.logical_size = (static_cast<uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
-	entries.push_back(std::move(entry));
+	return isUncShareRoot(path);
 }
 
 template <class Character>
-[[nodiscard]] filesystem_result<std::vector<directory_entry>> listDirectory(const Character* path)
+[[nodiscard]] filesystem_result<std::vector<directory_entry>> listDirectory(const Character* path, const listing_detail detail)
 {
 	windows_path_buffer searchPath{path};
 	if (!searchPath || !searchPath.append_directory_search_pattern()) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = searchPath.error_code() }};
+
+	// The search path without its trailing '*': the directory, as a prefix for its children's paths.
+	std::wstring childPathPrefix;
+	if (detail == listing_detail::full)
+		childPathPrefix.assign(searchPath.c_str(), searchPath.length() - 1);
 
 	WIN32_FIND_DATAW data{};
 	const HANDLE nativeHandle = ::FindFirstFileExW(searchPath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
@@ -238,7 +297,14 @@ template <class Character>
 	std::vector<directory_entry> entries;
 	for (;;)
 	{
-		appendDirectoryEntry(entries, data);
+		if (!isDotEntry(data.cFileName))
+		{
+			directory_entry entry = entryFromFindData(data);
+			if (detail == listing_detail::full && isNameSurrogateLink(entry.attributes))
+				entry.link_target = linkTargetStatus((childPathPrefix + entry.name).c_str());
+			entries.push_back(std::move(entry));
+		}
+
 		if (::FindNextFileW(nativeHandle, &data) != 0)
 			continue;
 
@@ -357,16 +423,70 @@ template <class Character>
 	return space;
 }
 
-} // namespace
-
-filesystem_result<std::vector<directory_entry>> list_directory(const char* path)
+template <class Character>
+[[nodiscard]] filesystem_result<directory_entry> getDirectoryEntry(const Character* path)
 {
-	return listDirectory(path);
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	// FindFirstFileExW cannot find a root, which has no name in its parent; GetFileAttributesExW can.
+	if (isRootPath({ nativePath.c_str(), nativePath.length() }))
+	{
+		WIN32_FILE_ATTRIBUTE_DATA data;
+		if (::GetFileAttributesExW(nativePath.c_str(), GetFileExInfoStandard, &data) == 0) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+
+		return directory_entry{
+			statusFromWindows(data.dwFileAttributes, 0, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime),
+			{},
+			std::nullopt
+		};
+	}
+
+	nativePath.remove_trailing_separator();
+	const std::wstring_view preparedPath{ nativePath.c_str(), nativePath.length() };
+	const size_t lastSeparator = preparedPath.find_last_of(L'\\');
+	const std::wstring_view name = lastSeparator == std::wstring_view::npos ? preparedPath : preparedPath.substr(lastSeparator + 1);
+	// FindFirstFileExW matches the last component as a pattern, with these as its wildcards.
+	if (name.find_first_of(LR"(*?<>")") != std::wstring_view::npos) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_NAME }};
+
+	WIN32_FIND_DATAW data{};
+	const HANDLE nativeHandle = ::FindFirstFileExW(nativePath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	find_handle handle{nativeHandle};
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+
+	directory_entry entry = entryFromFindData(data);
+	if (isNameSurrogateLink(entry.attributes))
+		entry.link_target = linkTargetStatus(nativePath.c_str());
+	return entry;
 }
 
-filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path)
+} // namespace
+
+filesystem_result<std::vector<directory_entry>> list_directory(const char* path, const listing_detail detail)
 {
-	return listDirectory(path);
+	return listDirectory(path, detail);
+}
+
+filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path, const listing_detail detail)
+{
+	return listDirectory(path, detail);
+}
+
+filesystem_result<directory_entry> get_directory_entry(const char* path)
+{
+	return getDirectoryEntry(path);
+}
+
+filesystem_result<directory_entry> get_directory_entry(const wchar_t* path)
+{
+	return getDirectoryEntry(path);
 }
 
 filesystem_result<entry_metadata> get_entry_metadata(const char* path, const link_behavior linkBehavior) noexcept

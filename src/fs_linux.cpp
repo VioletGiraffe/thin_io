@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -140,9 +142,86 @@ template<class Inode>
 	return entryIdentity(static_cast<filesystem_identity>(info.st_dev), info.st_ino);
 }
 
-[[nodiscard]] filesystem_result<entry_attributes> attributesFromDirectoryEntry(DIR* const directory, const dirent& entry)
+[[nodiscard]] entry_attributes attributesFromStat(const struct stat& info) noexcept
 {
-	switch (entry.d_type)
+	entry_attributes attributes = attributesFromMode(info.st_mode);
+#ifdef UF_HIDDEN
+	attributes.hidden = (info.st_flags & UF_HIDDEN) != 0;
+#endif
+	return attributes;
+}
+
+[[nodiscard]] entry_status statusFromStat(const struct stat& info) noexcept
+{
+	entry_status status;
+	status.attributes = attributesFromStat(info);
+	if (status.attributes.kind == entry_kind::regular_file && info.st_size >= 0)
+		status.logical_size = static_cast<uint64_t>(info.st_size);
+#ifdef __APPLE__
+	status.times.creation = fromTimespec(info.st_birthtimespec);
+	status.times.last_access = fromTimespec(info.st_atimespec);
+	status.times.last_write = fromTimespec(info.st_mtimespec);
+#else
+	status.times.last_access = fromTimespec(info.st_atim);
+	status.times.last_write = fromTimespec(info.st_mtim);
+#endif
+	status.permissions = file_permissions{ .mode = static_cast<uint32_t>(info.st_mode) & 07777u };
+	return status;
+}
+
+#if defined(__linux__) && defined(STATX_BTIME)
+[[nodiscard]] timestamp fromStatxTimestamp(const struct statx_timestamp& t) noexcept
+{
+	return timestamp{ .seconds = t.tv_sec, .nanoseconds = t.tv_nsec };
+}
+
+// Requires STATX_TYPE and STATX_MODE in the mask; every other field is taken only where the mask reports it.
+[[nodiscard]] entry_status statusFromStatx(const struct statx& info) noexcept
+{
+	entry_status status;
+	status.attributes = attributesFromMode(static_cast<mode_t>(info.stx_mode));
+	if (status.attributes.kind == entry_kind::regular_file && (info.stx_mask & STATX_SIZE) != 0)
+		status.logical_size = info.stx_size;
+	if ((info.stx_mask & STATX_BTIME) != 0)
+		status.times.creation = fromStatxTimestamp(info.stx_btime);
+	if ((info.stx_mask & STATX_ATIME) != 0)
+		status.times.last_access = fromStatxTimestamp(info.stx_atime);
+	if ((info.stx_mask & STATX_MTIME) != 0)
+		status.times.last_write = fromStatxTimestamp(info.stx_mtime);
+	status.permissions = file_permissions{ .mode = static_cast<uint32_t>(info.stx_mode) & 07777u };
+	return status;
+}
+#endif
+
+// One stat of path, relative to directoryFd unless path is absolute. Linux uses statx: stat has no creation time.
+[[nodiscard]] filesystem_result<entry_status> statusAt(const int directoryFd, const char* const path, const link_behavior linkBehavior) noexcept
+{
+	const int linkFlags = linkBehavior == link_behavior::do_not_follow ? AT_SYMLINK_NOFOLLOW : 0;
+#if defined(__linux__) && defined(STATX_BTIME)
+	struct statx extendedInfo{};
+	if (::statx(directoryFd, path, linkFlags | AT_NO_AUTOMOUNT, STATX_BASIC_STATS | STATX_BTIME, &extendedInfo) == 0)
+	{
+		static constexpr unsigned int requiredFields = STATX_TYPE | STATX_MODE;
+		if ((extendedInfo.stx_mask & requiredFields) != requiredFields) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = EIO }};
+		return statusFromStatx(extendedInfo);
+	}
+
+	const filesystem_error statxError = capture_last_filesystem_error();
+	if (statxError.native_code != ENOSYS && statxError.native_code != EINVAL)
+		return std::unexpected{statxError};
+#endif
+
+	struct stat info;
+	if (::fstatat(directoryFd, path, &info, linkFlags) != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	return statusFromStat(info);
+}
+
+// entry_kind::unknown when the directory reports no type.
+[[nodiscard]] entry_attributes attributesFromDirectoryType(const unsigned char type) noexcept
+{
+	switch (type)
 	{
 	case DT_REG:
 		return entry_attributes{ .kind = entry_kind::regular_file };
@@ -151,15 +230,43 @@ template<class Inode>
 	case DT_LNK:
 		return entry_attributes{ .kind = entry_kind::other, .is_link = true };
 	case DT_UNKNOWN:
-	{
-		struct stat info;
-		if (::fstatat(::dirfd(directory), entry.d_name, &info, AT_SYMLINK_NOFOLLOW) != 0) [[unlikely]]
-			return std::unexpected{capture_last_filesystem_error()};
-		return attributesFromMode(info.st_mode);
-	}
+		return entry_attributes{ .kind = entry_kind::unknown };
 	default:
 		return entry_attributes{ .kind = entry_kind::other };
 	}
+}
+
+[[nodiscard]] filesystem_result<entry_attributes> attributesFromDirectoryEntry(DIR* const directory, const dirent& entry)
+{
+	if (entry.d_type != DT_UNKNOWN)
+		return attributesFromDirectoryType(entry.d_type);
+
+	struct stat info;
+	if (::fstatat(::dirfd(directory), entry.d_name, &info, AT_SYMLINK_NOFOLLOW) != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	return attributesFromStat(info);
+}
+
+// Empty when the entry vanished after enumeration.
+[[nodiscard]] std::optional<directory_entry> fullDirectoryEntry(DIR* const directory, const dirent& nativeEntry)
+{
+	const int directoryFd = ::dirfd(directory);
+	directory_entry entry;
+	entry.name = nativeEntry.d_name;
+	if (auto status = statusAt(directoryFd, nativeEntry.d_name, link_behavior::do_not_follow))
+		static_cast<entry_status&>(entry) = std::move(*status);
+	else if (status.error().native_code == ENOENT)
+		return {};
+	else
+		entry.attributes = attributesFromDirectoryType(nativeEntry.d_type);
+
+	if (entry.attributes.is_link)
+	{
+		if (auto target = statusAt(directoryFd, nativeEntry.d_name, link_behavior::follow))
+			entry.link_target = std::move(*target);
+	}
+
+	return entry;
 }
 
 [[nodiscard]] bool isDotEntry(const char* const name) noexcept
@@ -169,7 +276,7 @@ template<class Inode>
 
 } // namespace
 
-filesystem_result<std::vector<directory_entry>> list_directory(const char* const path)
+filesystem_result<std::vector<directory_entry>> list_directory(const char* const path, const listing_detail detail)
 {
 	if (path == nullptr) [[unlikely]]
 	{
@@ -196,10 +303,20 @@ filesystem_result<std::vector<directory_entry>> list_directory(const char* const
 		if (isDotEntry(nativeEntry->d_name))
 			continue;
 
+		if (detail == listing_detail::full)
+		{
+			if (auto entry = fullDirectoryEntry(nativeDirectory, *nativeEntry))
+				entries.push_back(std::move(*entry));
+			continue;
+		}
+
 		auto attributes = attributesFromDirectoryEntry(nativeDirectory, *nativeEntry);
 		if (!attributes) [[unlikely]]
 			return std::unexpected{attributes.error()};
-		entries.push_back(directory_entry{ .name = nativeEntry->d_name, .attributes = *attributes, .logical_size = std::nullopt });
+		directory_entry entry;
+		entry.attributes = *attributes;
+		entry.name = nativeEntry->d_name;
+		entries.push_back(std::move(entry));
 	}
 
 	if (const auto closeError = directory.close()) [[unlikely]]
@@ -276,13 +393,41 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* const path, con
 		return std::unexpected{filesystem_error{ .native_code = EOVERFLOW }};
 
 	entry_metadata metadata;
-	metadata.attributes = attributesFromMode(info.st_mode);
+	metadata.attributes = attributesFromStat(info);
 	metadata.logical_size = static_cast<uint64_t>(info.st_size);
 	metadata.allocated_size = allocatedBlocks * 512;
 	metadata.hard_link_count = static_cast<uint64_t>(info.st_nlink);
 	metadata.identity = identityFromStat(info);
 	metadata.mount_id = metadata.identity->filesystem;
 	return metadata;
+}
+
+filesystem_result<directory_entry> get_directory_entry(const char* const path)
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	// A trailing separator would make the stat follow a link.
+	std::string_view pathView{path};
+	while (pathView.size() > 1 && pathView.back() == '/')
+		pathView.remove_suffix(1);
+	const std::string entryPath{pathView};
+
+	auto status = statusAt(AT_FDCWD, entryPath.c_str(), link_behavior::do_not_follow);
+	if (!status) [[unlikely]]
+		return std::unexpected{status.error()};
+
+	directory_entry entry;
+	static_cast<entry_status&>(entry) = std::move(*status);
+	if (pathView != "/")
+		entry.name = pathView.substr(pathView.find_last_of('/') + 1); // npos + 1 is 0: the whole path is the name
+	if (entry.attributes.is_link)
+	{
+		if (auto target = statusAt(AT_FDCWD, entryPath.c_str(), link_behavior::follow))
+			entry.link_target = std::move(*target);
+	}
+
+	return entry;
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* const directoryPath) noexcept

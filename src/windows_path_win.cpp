@@ -299,6 +299,12 @@ bool windows_path_buffer::append_directory_separator() noexcept
 	return true;
 }
 
+void windows_path_buffer::remove_trailing_separator() noexcept
+{
+	if (*this && _length > 1 && _path[_length - 1] == L'\\')
+		_path[--_length] = L'\0';
+}
+
 bool windows_path_buffer::append_directory_search_pattern() noexcept
 {
 	if (!*this) [[unlikely]]

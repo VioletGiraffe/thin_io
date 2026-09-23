@@ -39,6 +39,9 @@ bool removeDirectory(const char* const path) { return ::rmdir(path) == 0; }
 [[nodiscard]] native_string_view nativeName(const char* const name) { return name; }
 #endif
 
+// Test names are ASCII, so widening each character converts them losslessly.
+[[nodiscard]] native_string asciiName(const std::string_view name) { return native_string(name.begin(), name.end()); }
+
 [[nodiscard]] const directory_entry* findEntry(const std::vector<directory_entry>& entries, const native_string_view name)
 {
 	const auto found = std::find_if(entries.begin(), entries.end(), [name](const directory_entry& entry) { return entry.name == name; });
@@ -129,6 +132,25 @@ TEST_CASE("list_directory returns one directory level with native attributes and
 	CHECK_FALSE(regular->logical_size);
 #endif
 	REQUIRE(hidden != nullptr);
+	CHECK_FALSE(regular->link_target);
+#ifdef _WIN32
+	// The find data carries these, so even a basic listing reports them
+	CHECK(regular->times.last_write);
+	REQUIRE(regular->permissions);
+	CHECK_FALSE(regular->permissions->hidden);
+	CHECK_FALSE(regular->attributes.hidden);
+	CHECK(hidden->attributes.hidden);
+	REQUIRE(hidden->permissions);
+	CHECK(hidden->permissions->hidden);
+	CHECK(hidden->permissions->system);
+	const auto hiddenMetadata = get_entry_metadata(hiddenPath, link_behavior::do_not_follow);
+	REQUIRE(hiddenMetadata);
+	CHECK(hiddenMetadata->attributes.hidden);
+#else
+	CHECK_FALSE(regular->times.last_write);
+	CHECK_FALSE(regular->permissions);
+	CHECK_FALSE(hidden->attributes.hidden); // A leading dot is a naming convention, not an attribute
+#endif
 
 #ifdef _WIN32
 	REQUIRE(::SetFileAttributesA(hiddenPath, FILE_ATTRIBUTE_NORMAL) != 0);
@@ -158,6 +180,96 @@ TEST_CASE("list_directory captures invalid input and non-directory failures", "[
 	REQUIRE(file::delete_file(filePath));
 }
 
+TEST_CASE("list_directory with full detail reports sizes, times and permissions", "[fs][directory]")
+{
+	static constexpr char directoryPath[] = "list-directory-full";
+	static constexpr char childDirectoryPath[] = "list-directory-full/child";
+	static constexpr char filePath[] = "list-directory-full/file.bin";
+	static constexpr std::string_view contents = "detailed contents";
+	file::delete_file(filePath);
+	removeDirectory(childDirectoryPath);
+	removeDirectory(directoryPath);
+
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createDirectory(childDirectoryPath));
+	REQUIRE(createFileWithContents(filePath, contents));
+#ifndef _WIN32
+	REQUIRE(::chmod(filePath, 0640) == 0);
+#endif
+
+	const auto listed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(listed);
+	REQUIRE(listed->size() == 2);
+	const directory_entry* const regular = findEntry(*listed, asciiName("file.bin"));
+	const directory_entry* const child = findEntry(*listed, asciiName("child"));
+
+	REQUIRE(regular != nullptr);
+	CHECK(regular->attributes.kind == entry_kind::regular_file);
+	REQUIRE(regular->logical_size);
+	CHECK(*regular->logical_size == contents.size());
+	const auto times = get_times(filePath);
+	REQUIRE(times);
+	REQUIRE(regular->times.last_write);
+	CHECK(regular->times.last_write == times->last_write);
+	CHECK(regular->times.creation == times->creation);
+	CHECK(regular->times.last_access);
+	REQUIRE(regular->permissions);
+#ifdef _WIN32
+	CHECK_FALSE(regular->permissions->read_only);
+#else
+	CHECK(regular->permissions->mode == 0640);
+#endif
+	CHECK_FALSE(regular->link_target);
+
+	REQUIRE(child != nullptr);
+	CHECK(child->attributes.kind == entry_kind::directory);
+	CHECK_FALSE(child->logical_size);
+	CHECK(child->times.last_write);
+	CHECK_FALSE(child->link_target);
+
+	REQUIRE(file::delete_file(filePath));
+	REQUIRE(removeDirectory(childDirectoryPath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("get_directory_entry reports one entry as a full listing does", "[fs][directory]")
+{
+	static constexpr char directoryPath[] = "directory-entry-single";
+	static constexpr char filePath[] = "directory-entry-single/file.bin";
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(filePath, "single entry"));
+
+	const auto listed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(listed);
+	REQUIRE(listed->size() == 1);
+	const auto single = get_directory_entry(filePath);
+	REQUIRE(single);
+	CHECK(*single == listed->front());
+
+	// A trailing separator is ignored
+	const auto directory = get_directory_entry("directory-entry-single/");
+	REQUIRE(directory);
+	CHECK(directory->attributes.kind == entry_kind::directory);
+	CHECK(directory->name == asciiName(directoryPath));
+
+	const auto missing = get_directory_entry("directory-entry-single/missing");
+	REQUIRE_FALSE(missing);
+	const auto nullPath = get_directory_entry(static_cast<const char*>(nullptr));
+	REQUIRE_FALSE(nullPath);
+#ifdef _WIN32
+	CHECK(missing.error().native_code == ERROR_FILE_NOT_FOUND);
+	CHECK(nullPath.error().native_code == ERROR_INVALID_PARAMETER);
+#else
+	CHECK(missing.error().native_code == ENOENT);
+	CHECK(nullPath.error().native_code == EINVAL);
+#endif
+
+	REQUIRE(file::delete_file(filePath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
 #ifndef _WIN32
 TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs][directory][link]")
 {
@@ -177,7 +289,8 @@ TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs
 	removeDirectory(directoryPath);
 
 	REQUIRE(createDirectory(directoryPath));
-	REQUIRE(createFileWithContents(targetPath, {}));
+	static constexpr std::string_view targetContents = "link target";
+	REQUIRE(createFileWithContents(targetPath, targetContents));
 	REQUIRE(createDirectory(subdirectoryPath));
 	REQUIRE(::symlink("target", linkPath) == 0);
 	REQUIRE(::symlink("subdir", directoryLinkPath) == 0);
@@ -205,6 +318,37 @@ TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs
 	REQUIRE(fifo != nullptr);
 	CHECK_FALSE(fifo->attributes.is_link);
 	CHECK(fifo->attributes.kind == entry_kind::other);
+	CHECK_FALSE(link->link_target);
+
+	const auto detailed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(detailed);
+	const directory_entry* const detailedLink = findEntry(*detailed, "link");
+	const directory_entry* const detailedDirectoryLink = findEntry(*detailed, "dir-link");
+	const directory_entry* const detailedDanglingLink = findEntry(*detailed, "dangling-link");
+	const directory_entry* const detailedFifo = findEntry(*detailed, "fifo");
+	REQUIRE(detailedLink != nullptr);
+	CHECK(detailedLink->attributes.kind == entry_kind::other);
+	REQUIRE(detailedLink->link_target);
+	CHECK(detailedLink->link_target->attributes.kind == entry_kind::regular_file);
+	CHECK(detailedLink->link_target->logical_size == targetContents.size());
+	REQUIRE(detailedDirectoryLink != nullptr);
+	REQUIRE(detailedDirectoryLink->link_target);
+	CHECK(detailedDirectoryLink->link_target->attributes.kind == entry_kind::directory);
+	REQUIRE(detailedDanglingLink != nullptr);
+	CHECK(detailedDanglingLink->attributes.is_link);
+	CHECK_FALSE(detailedDanglingLink->link_target);
+	REQUIRE(detailedFifo != nullptr);
+	CHECK(detailedFifo->attributes.kind == entry_kind::other);
+	CHECK_FALSE(detailedFifo->link_target);
+
+	// A trailing separator would resolve the link; it is ignored instead
+	const auto singleDirectoryLink = get_directory_entry("list-directory-posix-types/dir-link/");
+	REQUIRE(singleDirectoryLink);
+	CHECK(*singleDirectoryLink == *detailedDirectoryLink);
+	const auto singleDanglingLink = get_directory_entry(danglingLinkPath);
+	REQUIRE(singleDanglingLink);
+	CHECK(singleDanglingLink->attributes.is_link);
+	CHECK_FALSE(singleDanglingLink->link_target);
 
 	REQUIRE(file::delete_file(danglingLinkPath));
 	REQUIRE(file::delete_file(directoryLinkPath));
@@ -234,6 +378,43 @@ TEST_CASE("POSIX directory enumeration preserves native name bytes that are not 
 	CHECK(native->name == invalidUtf8Name);
 
 	REQUIRE(file::delete_file(nativeNamePath.c_str()));
+	REQUIRE(removeDirectory(directoryPath));
+}
+#endif
+
+TEST_CASE("POSIX get_directory_entry reports the root with an empty name", "[fs][directory]")
+{
+	const auto root = get_directory_entry("/");
+	REQUIRE(root);
+	CHECK(root->attributes.kind == entry_kind::directory);
+	CHECK(root->name.empty());
+}
+
+#ifdef UF_HIDDEN
+TEST_CASE("POSIX full listing reports the UF_HIDDEN flag", "[fs][directory]")
+{
+	static constexpr char directoryPath[] = "list-directory-uf-hidden";
+	static constexpr char filePath[] = "list-directory-uf-hidden/flagged";
+	::chflags(filePath, 0);
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(filePath, {}));
+	REQUIRE(::chflags(filePath, UF_HIDDEN) == 0);
+
+	const auto listed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(listed);
+	REQUIRE(listed->size() == 1);
+	CHECK(listed->front().attributes.hidden);
+	const auto single = get_directory_entry(filePath);
+	REQUIRE(single);
+	CHECK(single->attributes.hidden);
+	const auto metadata = get_entry_metadata(filePath, link_behavior::do_not_follow);
+	REQUIRE(metadata);
+	CHECK(metadata->attributes.hidden);
+
+	REQUIRE(::chflags(filePath, 0) == 0);
+	REQUIRE(file::delete_file(filePath));
 	REQUIRE(removeDirectory(directoryPath));
 }
 #endif
@@ -403,6 +584,23 @@ TEST_CASE("Windows directory enumeration reports reparse points and their tag", 
 	CHECK(danglingLink->attributes.is_link);
 	CHECK(danglingLink->attributes.reparse_tag == IO_REPARSE_TAG_SYMLINK);
 	CHECK_FALSE(danglingLink->logical_size);
+	CHECK_FALSE(link->link_target);
+
+	const auto detailed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(detailed);
+	const directory_entry* const detailedLink = findEntry(*detailed, L"link.file");
+	const directory_entry* const detailedDanglingLink = findEntry(*detailed, L"dangling.file");
+	REQUIRE(detailedLink != nullptr);
+	REQUIRE(detailedLink->link_target);
+	CHECK(detailedLink->link_target->attributes.kind == entry_kind::regular_file);
+	CHECK_FALSE(detailedLink->link_target->attributes.is_link);
+	CHECK(detailedLink->link_target->logical_size == 0);
+	REQUIRE(detailedDanglingLink != nullptr);
+	CHECK_FALSE(detailedDanglingLink->link_target);
+
+	const auto singleLink = get_directory_entry(linkPath);
+	REQUIRE(singleLink);
+	CHECK(*singleLink == *detailedLink);
 
 	REQUIRE(file::delete_file(danglingLinkPath));
 	REQUIRE(file::delete_file(linkPath));
@@ -431,6 +629,16 @@ TEST_CASE("Windows directory enumeration reports a junction as a linked director
 	CHECK(link->attributes.is_link);
 	CHECK(link->attributes.reparse_tag == IO_REPARSE_TAG_MOUNT_POINT);
 	CHECK_FALSE(link->logical_size);
+
+	const auto detailed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(detailed);
+	const directory_entry* const detailedLink = findEntry(*detailed, L"link.dir");
+	REQUIRE(detailedLink != nullptr);
+	REQUIRE(detailedLink->link_target);
+	CHECK(detailedLink->link_target->attributes.kind == entry_kind::directory);
+	const auto singleLink = get_directory_entry(L"list-directory-junction\\link.dir\\");
+	REQUIRE(singleLink);
+	CHECK(*singleLink == *detailedLink);
 
 	REQUIRE(removeDirectory(linkPath));
 	REQUIRE(removeDirectory(targetPath));
@@ -467,9 +675,40 @@ TEST_CASE("Windows directory enumeration reports a directory symbolic link with 
 	CHECK(link->attributes.reparse_tag == IO_REPARSE_TAG_SYMLINK);
 	CHECK_FALSE(link->logical_size);
 
+	const auto detailed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(detailed);
+	const directory_entry* const detailedLink = findEntry(*detailed, L"link.dir");
+	REQUIRE(detailedLink != nullptr);
+	REQUIRE(detailedLink->link_target);
+	CHECK(detailedLink->link_target->attributes.kind == entry_kind::directory);
+
 	REQUIRE(removeDirectory(linkPath));
 	REQUIRE(removeDirectory(targetPath));
 	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("Windows get_directory_entry reports a drive root and rejects wildcards", "[fs][directory][windows]")
+{
+	std::array<wchar_t, windows_path_buffer::max_length + 1> currentDirectory{};
+	const DWORD length = ::GetCurrentDirectoryW(static_cast<DWORD>(currentDirectory.size()), currentDirectory.data());
+	REQUIRE(length > 1);
+	REQUIRE(length < currentDirectory.size());
+	if (currentDirectory[1] != L':')
+	{
+		WARN("The current directory is not on a drive; drive-root assertion skipped");
+		return;
+	}
+
+	const wchar_t driveRoot[4] { currentDirectory[0], L':', L'\\', L'\0' };
+	const auto root = get_directory_entry(driveRoot);
+	REQUIRE(root);
+	CHECK(root->attributes.kind == entry_kind::directory);
+	CHECK(root->name.empty());
+	CHECK_FALSE(root->link_target);
+
+	const auto wildcard = get_directory_entry("directory-entry-*");
+	REQUIRE_FALSE(wildcard);
+	CHECK(wildcard.error().native_code == ERROR_INVALID_NAME);
 }
 
 TEST_CASE("Windows drive-relative enumeration lists the drive's current directory", "[fs][directory][windows]")

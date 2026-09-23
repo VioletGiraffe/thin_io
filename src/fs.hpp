@@ -29,10 +29,20 @@ namespace thin_io {
 
 // Lists the immediate children of one directory. Returned names are native and relative to path; no entry is
 // recursively traversed. A failure after enumeration has started fails the whole listing rather than returning a
-// partial vector.
-[[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const char* path);
+// partial vector. With listing_detail::full, an entry that vanishes before its stat is left out, and one whose stat
+// fails otherwise keeps only what the enumeration returned.
+[[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const char* path, listing_detail detail = listing_detail::basic);
 #ifdef _WIN32
-[[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path);
+[[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path, listing_detail detail = listing_detail::basic);
+#endif
+
+// Reports one entry as list_directory() does with listing_detail::full, without opening it: works for entries that
+// cannot be opened, such as a Windows paging file. A trailing separator is ignored.
+// name is empty for a root. Otherwise it is the path's last component on POSIX, and the filesystem's spelling on Windows.
+// Windows: requires list access to the parent directory, except for a root; wildcard characters in the name fail.
+[[nodiscard]] filesystem_result<directory_entry> get_directory_entry(const char* path);
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<directory_entry> get_directory_entry(const wchar_t* path);
 #endif
 
 // Reads metadata for one filesystem entry. linkBehavior explicitly selects whether a symbolic link or reparse point

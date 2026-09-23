@@ -18,10 +18,12 @@ public:
 
 	[[nodiscard]] explicit operator bool() const noexcept { return _error == ERROR_SUCCESS; }
 	[[nodiscard]] const wchar_t* c_str() const noexcept { return _path.data(); }
+	[[nodiscard]] size_t length() const noexcept { return _length; }
 	[[nodiscard]] DWORD error_code() const noexcept { return _error; }
 
 	[[nodiscard]] bool append_directory_separator() noexcept;
 	[[nodiscard]] bool append_directory_search_pattern() noexcept;
+	void remove_trailing_separator() noexcept;
 
 private:
 	void prepare() noexcept;
