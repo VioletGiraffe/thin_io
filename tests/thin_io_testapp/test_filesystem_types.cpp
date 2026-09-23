@@ -1,4 +1,3 @@
-#define CATCH_CONFIG_MAIN
 #include "catch_thin_io.hpp"
 
 #include "filesystem_types.hpp"

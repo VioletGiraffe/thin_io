@@ -93,6 +93,7 @@ INCLUDEPATH += \
 	$${PWD}/../../src
 
 SOURCES += \
+	main.cpp \
 	test_directory_enumeration.cpp \
 	test_entry_metadata.cpp \
 	test_file.cpp \
