@@ -3,7 +3,7 @@
 // Every test includes Catch through this header: a StringMaker must be visible in every file that prints its type.
 
 #define CATCH_CONFIG_ENABLE_OPTIONAL_STRINGMAKER
-#include "catch2/catch.hpp"
+#include "3rdparty/catch2/catch.hpp" // cpp-template-utils
 
 #include "filesystem_error.hpp"
 #include "filesystem_types.hpp"
@@ -13,6 +13,15 @@
 #include <string>
 
 namespace Catch {
+
+// Prints as Catch prints std::optional
+template<typename T>
+struct StringMaker<heap_optional<T>> {
+	static std::string convert(const heap_optional<T>& value)
+	{
+		return value ? Detail::stringify(*value) : "{ }";
+	}
+};
 
 template<>
 struct StringMaker<thin_io::entry_kind> {
@@ -39,6 +48,9 @@ struct StringMaker<thin_io::timestamp> {
 	// Not a decimal fraction: nanoseconds is a positive offset even when seconds is negative
 	static std::string convert(const thin_io::timestamp& t)
 	{
+		if (!t.is_set())
+			return "unset";
+
 		return std::to_string(t.seconds) + " s + " + std::to_string(t.nanoseconds) + " ns";
 	}
 };

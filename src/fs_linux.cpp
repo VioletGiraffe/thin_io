@@ -31,7 +31,7 @@ namespace thin_io {
 
 bool set_times(const char* path, const entry_times& times) noexcept
 {
-	if (times.last_access || times.last_write)
+	if (times.last_access.is_set() || times.last_write.is_set())
 	{
 		const timespec ts[2] { toTimespecOrOmit(times.last_access), toTimespecOrOmit(times.last_write) };
 		if (::utimensat(AT_FDCWD, path, ts, 0) != 0)
@@ -43,13 +43,13 @@ bool set_times(const char* path, const entry_times& times) noexcept
 
 	// Darwin exposes the birth time as a writable attribute; POSIX has no equivalent. Applied after utimensat() so that
 	// an explicitly requested birth time cannot be clobbered by a side effect of setting the modification time.
-	if (times.creation)
+	if (times.creation.is_set())
 	{
 		attrlist attributes{};
 		attributes.bitmapcount = ATTR_BIT_MAP_COUNT;
 		attributes.commonattr = ATTR_CMN_CRTIME;
 
-		timespec creation = toTimespec(*times.creation);
+		timespec creation = toTimespec(times.creation);
 		if (::setattrlist(path, &attributes, &creation, sizeof(creation), 0) != 0)
 			return false;
 	}
@@ -158,7 +158,7 @@ template<class Inode>
 	if (status.attributes.kind == entry_kind::regular_file && info.st_size >= 0)
 		status.logical_size = static_cast<uint64_t>(info.st_size);
 #ifdef __APPLE__
-	status.times.creation = fromTimespec(info.st_birthtimespec);
+	status.creation_time = fromTimespec(info.st_birthtimespec);
 	status.times.last_access = fromTimespec(info.st_atimespec);
 	status.times.last_write = fromTimespec(info.st_mtimespec);
 #else
@@ -183,7 +183,7 @@ template<class Inode>
 	if (status.attributes.kind == entry_kind::regular_file && (info.stx_mask & STATX_SIZE) != 0)
 		status.logical_size = info.stx_size;
 	if ((info.stx_mask & STATX_BTIME) != 0)
-		status.times.creation = fromStatxTimestamp(info.stx_btime);
+		status.creation_time = fromStatxTimestamp(info.stx_btime);
 	if ((info.stx_mask & STATX_ATIME) != 0)
 		status.times.last_access = fromStatxTimestamp(info.stx_atime);
 	if ((info.stx_mask & STATX_MTIME) != 0)

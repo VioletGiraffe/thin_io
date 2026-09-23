@@ -66,6 +66,9 @@ linux*|mac*|freebsd{
 }
 
 
+# cpp-template-utils is checked out beside thin_io
+INCLUDEPATH += ../cpp-template-utils
+
 HEADERS += \
 	src/enum_helpers.hpp \
 	src/file.hpp \

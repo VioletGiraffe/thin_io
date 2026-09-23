@@ -899,8 +899,8 @@ TEST_CASE("handle-based times round-trip", "[file]")
 
 	const auto initial = f.times();
 	REQUIRE(initial);
-	CHECK(initial->last_access);
-	CHECK(initial->last_write);
+	CHECK(initial->last_access.is_set());
+	CHECK(initial->last_write.is_set());
 
 	// All values are multiples of 100 ns so that NTFS can represent them exactly
 	entry_times requested;
@@ -917,7 +917,7 @@ TEST_CASE("handle-based times round-trip", "[file]")
 	if constexpr (creation_time_settable)
 		CHECK(actual->creation == requested.creation);
 
-	// A nullopt member leaves the current value untouched
+	// An unset member leaves the current value untouched
 	entry_times writeOnly;
 	writeOnly.last_write = timestamp{ .seconds = 1'700'000'000, .nanoseconds = 0 };
 	REQUIRE(f.set_times(writeOnly));
@@ -1009,7 +1009,7 @@ TEST_CASE("handle-based metadata reads work on a read-only open", "[file]")
 
 	const auto times = f.times();
 	REQUIRE(times);
-	CHECK(times->last_write);
+	CHECK(times->last_write.is_set());
 	REQUIRE(f.permissions());
 
 	entry_times someTime;

@@ -23,6 +23,9 @@ jobs:
       with:
         submodules: 'recursive'
 
+    - name: Checkout dependencies
+      run: git clone --depth 1 https://github.com/VioletGiraffe/cpp-template-utils ../cpp-template-utils
+
     # CMAKE_BUILD_TYPE for single-config generators, --config / -C for Visual Studio
     - name: Configure
       run: cmake -S tests -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }}

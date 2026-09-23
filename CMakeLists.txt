@@ -81,7 +81,8 @@ add_library(${TARGET_NAME} STATIC
 	${PLATFORM_FILES}
 )
 
-target_include_directories(${TARGET_NAME} PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src)
+# cpp-template-utils is checked out beside thin_io
+target_include_directories(${TARGET_NAME} PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src ${CMAKE_CURRENT_LIST_DIR}/../cpp-template-utils)
 
 # PUBLIC: the headers require C++23 (std::expected, std::to_underlying)
 target_compile_features(${TARGET_NAME} PUBLIC cxx_std_23)

@@ -2,6 +2,8 @@
 #include "timestamp_win.hpp"
 #include "windows_path_win.hpp"
 
+#include "utility/heap_optional.hpp" // cpp-template-utils
+
 #include <Windows.h>
 
 #include <optional>
@@ -32,7 +34,7 @@ namespace thin_io {
 template <class Character>
 [[nodiscard]] static bool setTimesForPath(const Character* path, const entry_times& times) noexcept
 {
-	if (!times.creation && !times.last_access && !times.last_write)
+	if (!times.creation.is_set() && !times.last_access.is_set() && !times.last_write.is_set())
 		return true; // Nothing to write, so don't even open the path - matching the POSIX implementation
 
 	windows_path_buffer nativePath{path};
@@ -209,7 +211,7 @@ private:
 }
 
 // Follows the link at path. Absent when the target cannot be reached.
-[[nodiscard]] std::optional<entry_status> linkTargetStatus(const wchar_t* const path) noexcept
+[[nodiscard]] heap_optional<entry_status> linkTargetStatus(const wchar_t* const path)
 {
 	const HANDLE nativeHandle = ::CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);

@@ -19,8 +19,8 @@ namespace thin_io {
 // Reports the timestamps of an existing file or directory, following links. The access and modification times are
 // always reported; the creation time is reported on Windows and Darwin, and on Linux only where the kernel and the
 // filesystem provide it - note that this is wider than what creation_time_settable promises, which is about writing.
-// A timestamp the filesystem does not keep at all is reported as nullopt rather than as an epoch value, so feeding the
-// result straight back into set_times() transfers whatever the source has and the destination will accept.
+// A timestamp the filesystem does not keep at all is reported unset, so feeding the result straight back into
+// set_times() transfers whatever the source has and the destination will accept.
 // Returns nullopt on failure, in which case file::error_code() and file::text_for_last_error() report the reason.
 [[nodiscard]] std::optional<entry_times> get_times(const char* path) noexcept;
 #ifdef _WIN32

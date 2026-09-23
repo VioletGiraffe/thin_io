@@ -84,7 +84,8 @@ attributes. `is_link` is true for POSIX symbolic links and Windows reparse point
 Windows tag and is zero otherwise. `hidden` is the operating system's flag (`FILE_ATTRIBUTE_HIDDEN`, `UF_HIDDEN`), never
 a naming convention.
 
-Size, times and permissions are optional, because what the enumeration returns differs by platform.
+Size and permissions are optional, and times unset, where the enumeration does not provide them: that differs by
+platform.
 `listing_detail` selects how much is filled:
 
 | | Windows | POSIX |
@@ -134,4 +135,5 @@ Windows filesystem does not expose `FILE_ID_128` information.
 
 - The supplied build uses `qmake`; another build system only needs the common headers and the implementation files
   for its target platform.
-- Catch2, vendored in `3rdparty/`, is used only by the tests.
+- Depends on the header-only [cpp-template-utils](https://github.com/VioletGiraffe/cpp-template-utils), checked out
+  beside thin_io as `../cpp-template-utils`. Its Catch2 copy is used by the tests.

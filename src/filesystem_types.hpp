@@ -1,5 +1,7 @@
 #pragma once
 
+#include "utility/heap_optional.hpp" // cpp-template-utils
+
 #include <array>
 #include <optional>
 #include <stdint.h>
@@ -21,15 +23,18 @@ struct timestamp {
 	int64_t seconds = 0;
 	uint32_t nanoseconds = 0; // [0, 999'999'999]
 
+	// The epoch itself is the unset value: no real timestamp is exactly zero.
+	[[nodiscard]] bool is_set() const noexcept { return seconds != 0 || nanoseconds != 0; }
+
 	[[nodiscard]] bool operator==(const timestamp&) const noexcept = default;
 };
 
-// What a nullopt member means depends on the direction: set_times() leaves that timestamp untouched, get_times()
+// What an unset member means depends on the direction: set_times() leaves that timestamp untouched, get_times()
 // reports that the platform or the filesystem does not provide it.
 struct entry_times {
-	std::optional<timestamp> creation;
-	std::optional<timestamp> last_access;
-	std::optional<timestamp> last_write;
+	timestamp creation;
+	timestamp last_access;
+	timestamp last_write;
 
 	[[nodiscard]] bool operator==(const entry_times&) const noexcept = default;
 };
@@ -101,7 +106,8 @@ enum class listing_detail : uint8_t {
 struct directory_entry : entry_status {
 	native_string name; // Relative entry name, never a rebuilt absolute path.
 	// listing_detail::full, links only: what the link resolves to. Absent when the target cannot be reached.
-	std::optional<entry_status> link_target;
+	// On the heap: most entries are not links, so an inline entry_status would be mostly wasted space.
+	heap_optional<entry_status> link_target;
 
 	[[nodiscard]] bool operator==(const directory_entry&) const noexcept = default;
 };

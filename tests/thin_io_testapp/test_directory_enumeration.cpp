@@ -135,7 +135,7 @@ TEST_CASE("list_directory returns one directory level with native attributes and
 	CHECK_FALSE(regular->link_target);
 #ifdef _WIN32
 	// The find data carries these, so even a basic listing reports them
-	CHECK(regular->times.last_write);
+	CHECK(regular->times.last_write.is_set());
 	REQUIRE(regular->permissions);
 	CHECK_FALSE(regular->permissions->hidden);
 	CHECK_FALSE(regular->attributes.hidden);
@@ -147,7 +147,7 @@ TEST_CASE("list_directory returns one directory level with native attributes and
 	REQUIRE(hiddenMetadata);
 	CHECK(hiddenMetadata->attributes.hidden);
 #else
-	CHECK_FALSE(regular->times.last_write);
+	CHECK_FALSE(regular->times.last_write.is_set());
 	CHECK_FALSE(regular->permissions);
 	CHECK_FALSE(hidden->attributes.hidden); // A leading dot is a naming convention, not an attribute
 #endif
@@ -209,10 +209,10 @@ TEST_CASE("list_directory with full detail reports sizes, times and permissions"
 	CHECK(*regular->logical_size == contents.size());
 	const auto times = get_times(filePath);
 	REQUIRE(times);
-	REQUIRE(regular->times.last_write);
+	REQUIRE(regular->times.last_write.is_set());
 	CHECK(regular->times.last_write == times->last_write);
 	CHECK(regular->times.creation == times->creation);
-	CHECK(regular->times.last_access);
+	CHECK(regular->times.last_access.is_set());
 	REQUIRE(regular->permissions);
 #ifdef _WIN32
 	CHECK_FALSE(regular->permissions->read_only);
@@ -224,7 +224,7 @@ TEST_CASE("list_directory with full detail reports sizes, times and permissions"
 	REQUIRE(child != nullptr);
 	CHECK(child->attributes.kind == entry_kind::directory);
 	CHECK_FALSE(child->logical_size);
-	CHECK(child->times.last_write);
+	CHECK(child->times.last_write.is_set());
 	CHECK_FALSE(child->link_target);
 
 	REQUIRE(file::delete_file(filePath));

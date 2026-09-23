@@ -5,7 +5,6 @@
 #include <Windows.h>
 
 #include <limits>
-#include <optional>
 
 namespace thin_io {
 
@@ -32,7 +31,7 @@ inline constexpr int64_t maxRepresentableSeconds = (std::numeric_limits<int64_t>
 
 // A zero tick count is how Windows reports a timestamp the filesystem does not keep - FAT has no creation time,
 // for one. It means "absent", not the year 1601.
-[[nodiscard]] inline std::optional<timestamp> fromFileTimeTicks(const uint64_t rawTicks) noexcept
+[[nodiscard]] inline timestamp fromFileTimeTicks(const uint64_t rawTicks) noexcept
 {
 	if (rawTicks == 0)
 		return {};
@@ -49,28 +48,28 @@ inline constexpr int64_t maxRepresentableSeconds = (std::numeric_limits<int64_t>
 	return timestamp{ .seconds = seconds, .nanoseconds = static_cast<uint32_t>(subSecondTicks) * 100 };
 }
 
-[[nodiscard]] inline std::optional<timestamp> fromFileTime(const FILETIME& fileTime) noexcept
+[[nodiscard]] inline timestamp fromFileTime(const FILETIME& fileTime) noexcept
 {
 	return fromFileTimeTicks((static_cast<uint64_t>(fileTime.dwHighDateTime) << 32) | fileTime.dwLowDateTime);
 }
 
-// Applies the requested timestamps to an open handle; a nullopt member is left untouched. Fails with
+// Applies the requested timestamps to an open handle; an unset member is left untouched. Fails with
 // ERROR_INVALID_PARAMETER when a requested time cannot be represented as FILETIME.
 [[nodiscard]] inline bool setFileTimes(const HANDLE fileHandle, const entry_times& times) noexcept
 {
 	FILETIME creation{}, lastAccess{}, lastWrite{};
-	if ((times.creation && !toFileTime(*times.creation, creation))
-		|| (times.last_access && !toFileTime(*times.last_access, lastAccess))
-		|| (times.last_write && !toFileTime(*times.last_write, lastWrite))) [[unlikely]]
+	if ((times.creation.is_set() && !toFileTime(times.creation, creation))
+		|| (times.last_access.is_set() && !toFileTime(times.last_access, lastAccess))
+		|| (times.last_write.is_set() && !toFileTime(times.last_write, lastWrite))) [[unlikely]]
 	{
 		::SetLastError(ERROR_INVALID_PARAMETER);
 		return false;
 	}
 
 	return ::SetFileTime(fileHandle,
-		times.creation ? &creation : nullptr,
-		times.last_access ? &lastAccess : nullptr,
-		times.last_write ? &lastWrite : nullptr) != 0;
+		times.creation.is_set() ? &creation : nullptr,
+		times.last_access.is_set() ? &lastAccess : nullptr,
+		times.last_write.is_set() ? &lastWrite : nullptr) != 0;
 }
 
 } // namespace thin_io

@@ -175,7 +175,7 @@ std::optional<entry_times> file_impl::times() const noexcept
 
 bool file_impl::set_times(const entry_times& times) noexcept
 {
-	if (times.last_access || times.last_write)
+	if (times.last_access.is_set() || times.last_write.is_set())
 	{
 		const timespec ts[2] { toTimespecOrOmit(times.last_access), toTimespecOrOmit(times.last_write) };
 		if (::futimens(_fd, ts) != 0)
@@ -185,13 +185,13 @@ bool file_impl::set_times(const entry_times& times) noexcept
 #ifdef __APPLE__
 	// Applied after futimens() so that an explicitly requested birth time cannot be clobbered by a side effect of
 	// setting the modification time.
-	if (times.creation)
+	if (times.creation.is_set())
 	{
 		attrlist attributes{};
 		attributes.bitmapcount = ATTR_BIT_MAP_COUNT;
 		attributes.commonattr = ATTR_CMN_CRTIME;
 
-		timespec creation = toTimespec(*times.creation);
+		timespec creation = toTimespec(times.creation);
 		if (::fsetattrlist(_fd, &attributes, &creation, sizeof(creation), 0) != 0)
 			return false;
 	}

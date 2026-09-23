@@ -31,9 +31,6 @@ target_link_libraries(${TARGET_NAME} PRIVATE thin_io)
 # CONFIG += strict_c++ in the .pro
 set_target_properties(${TARGET_NAME} PROPERTIES CXX_EXTENSIONS OFF)
 
-# "catch2/catch.hpp"
-target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../3rdparty)
-
 thin_io_add_gcc_clang_options(${TARGET_NAME})
 thin_io_add_msvc_options(${TARGET_NAME})
 

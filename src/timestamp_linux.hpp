@@ -17,16 +17,16 @@ namespace thin_io {
 }
 
 // UTIME_OMIT in tv_nsec is how utimensat() and futimens() are told to leave a timestamp alone.
-[[nodiscard]] inline timespec toTimespecOrOmit(const std::optional<timestamp>& t) noexcept
+[[nodiscard]] inline timespec toTimespecOrOmit(const timestamp& t) noexcept
 {
-	if (!t)
+	if (!t.is_set())
 	{
 		timespec ts{};
 		ts.tv_nsec = UTIME_OMIT;
 		return ts;
 	}
 
-	return toTimespec(*t);
+	return toTimespec(t);
 }
 
 [[nodiscard]] inline timestamp fromTimespec(const timespec& ts) noexcept
@@ -36,8 +36,8 @@ namespace thin_io {
 
 #ifdef STATX_BTIME
 // The birth time is absent from stat(): reading it needs statx(), which arrived in kernel 4.11 and reports the
-// field only on the filesystems that keep one. Both shortfalls surface as a nullopt birth time.
-[[nodiscard]] inline std::optional<timestamp> statxBirthTime(const int dirFd, const char* const path, const int flags) noexcept
+// field only on the filesystems that keep one. Both shortfalls surface as an unset birth time.
+[[nodiscard]] inline timestamp statxBirthTime(const int dirFd, const char* const path, const int flags) noexcept
 {
 	struct statx extendedInfo;
 	if (::statx(dirFd, path, flags, STATX_BTIME, &extendedInfo) == 0 && (extendedInfo.stx_mask & STATX_BTIME) != 0)

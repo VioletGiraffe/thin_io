@@ -221,7 +221,7 @@ public:
 
 	// Timestamps of the open file, read through the handle (fstat / GetFileInformationByHandleEx); for a file opened
 	// through a link these are inherently the followed target's. Same contract as get_times() / set_times() in fs.hpp:
-	// a nullopt member is not provided / left untouched, and a creation time is silently ignored where not settable.
+	// an unset member is not provided / left untouched, and a creation time is silently ignored where not settable.
 	[[nodiscard]] inline std::optional<entry_times> times() const noexcept {
 		return _impl.times();
 	}

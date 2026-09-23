@@ -89,7 +89,7 @@ mac*|linux*|freebsd*{
 }
 
 INCLUDEPATH += \
-	$${PWD}/../../3rdparty \
+	$${PWD}/../../../cpp-template-utils \
 	$${PWD}/../../src
 
 SOURCES += \

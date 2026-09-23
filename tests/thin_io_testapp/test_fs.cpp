@@ -112,15 +112,15 @@ TEST_CASE("get_times reports a newly created file and directory", "[fs]")
 
 		const auto times = get_times(path);
 		REQUIRE(times);
-		REQUIRE(times->last_access);
-		REQUIRE(times->last_write);
+		REQUIRE(times->last_access.is_set());
+		REQUIRE(times->last_write.is_set());
 #if defined(_WIN32) || defined(__APPLE__)
-		REQUIRE(times->creation); // Linux reports it only where the filesystem keeps one, so it cannot be required
+		REQUIRE(times->creation.is_set()); // Linux reports it only where the filesystem keeps one, so it cannot be required
 #endif
 
 		// Loose on purpose: the window is here to catch a timestamp landing in the wrong century, not to time the disk
-		CHECK(times->last_write->seconds >= createdNoEarlierThan - 5);
-		CHECK(times->last_write->seconds <= createdNoLaterThan + 5);
+		CHECK(times->last_write.seconds >= createdNoEarlierThan - 5);
+		CHECK(times->last_write.seconds <= createdNoLaterThan + 5);
 	}
 
 	REQUIRE(file::delete_file(testFilePath));

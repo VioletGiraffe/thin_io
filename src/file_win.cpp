@@ -227,7 +227,7 @@ std::optional<entry_times> file_impl::times() const noexcept
 
 bool file_impl::set_times(const entry_times& times) noexcept
 {
-	if (!times.creation && !times.last_access && !times.last_write)
+	if (!times.creation.is_set() && !times.last_access.is_set() && !times.last_write.is_set())
 		return true;
 
 	return setFileTimes(_h, times);
