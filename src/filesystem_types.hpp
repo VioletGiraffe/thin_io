@@ -30,6 +30,8 @@ struct entry_times {
 	std::optional<timestamp> creation;
 	std::optional<timestamp> last_access;
 	std::optional<timestamp> last_write;
+
+	[[nodiscard]] bool operator==(const entry_times&) const noexcept = default;
 };
 
 // False on Linux, where the birth time is assigned by the kernel at inode creation and no API can change it -
