@@ -1,5 +1,5 @@
-# 3.20 for cxx_std_23
-cmake_minimum_required(VERSION 3.20)
+# 3.25 for MSVC_DEBUG_INFORMATION_FORMAT
+cmake_minimum_required(VERSION 3.25)
 
 project(thin_io LANGUAGES CXX)
 
@@ -23,6 +23,7 @@ function(thin_io_add_gcc_clang_options TARGET)
 	if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		target_compile_options(${TARGET} PRIVATE
 			-Wshadow-all -Wcast-align -Wcomma -Wconditional-uninitialized -Wheader-hygiene -Wloop-analysis -Wextra-semi-stmt -Wunreachable-code-aggressive
+			-Wno-shadow-uncaptured-local # flags every [x = std::move(x)] init-capture
 			-Wshorten-64-to-32 -Wmissing-prototypes -Wmissing-variable-declarations
 			-Wimplicit-fallthrough -Wsuggest-override
 			-Werror=return-stack-address -Werror=infinite-recursion
@@ -41,6 +42,24 @@ function(thin_io_add_gcc_clang_options TARGET)
 		"$<$<CONFIG:Release>:NDEBUG=1>"
 		"$<$<CONFIG:Debug>:_DEBUG>"
 	)
+endfunction()
+
+# The MSVC options common to both targets, including the /we list both .pro files hold
+function(thin_io_add_msvc_options TARGET)
+	if (NOT MSVC)
+		return()
+	endif()
+
+	target_compile_options(${TARGET} PRIVATE
+		/permissive- /Zc:__cplusplus /utf-8 /MP /W4
+		/we4715 /we4716 # not all control paths return a value / must return a value
+		/we4172         # returning address of local variable or temporary
+		/we4700         # uninitialized local variable used
+		/we4477         # printf format string does not match the argument
+		/we4551         # function call missing argument list
+		/we4552 /we4553 # operator has no effect; did you intend '='?
+	)
+	target_compile_definitions(${TARGET} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 endfunction()
 
 # Must hold the same files as thin_io.pro
@@ -69,10 +88,11 @@ target_compile_features(${TARGET_NAME} PUBLIC cxx_std_23)
 set_target_properties(${TARGET_NAME} PROPERTIES CXX_EXTENSIONS OFF)
 
 thin_io_add_gcc_clang_options(${TARGET_NAME})
+thin_io_add_msvc_options(${TARGET_NAME})
 
 if (MSVC)
-	target_compile_options(${TARGET_NAME} PRIVATE /permissive- /Zc:__cplusplus /MP /W4 $<$<CONFIG:Debug>:/JMC>)
-	target_compile_definitions(${TARGET_NAME} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+	target_compile_options(${TARGET_NAME} PRIVATE $<$<CONFIG:Debug>:/JMC>)
+	set_target_properties(${TARGET_NAME} PROPERTIES MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase) # /Zi
 endif()
 
 # $<0:> suppresses the per-configuration subdirectory MSBuild otherwise appends

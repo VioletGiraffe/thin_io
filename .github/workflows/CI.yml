@@ -3,9 +3,6 @@ name: CI
 on: [push, pull_request, workflow_dispatch]
 
 env:
-  # Path to the solution file relative to the root of the project.
-  SOLUTION_FILE_PATH: .
-
   # Configuration type to build.
   # You can convert this to a build matrix if you need coverage of multiple configuration types.
   # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
@@ -13,7 +10,7 @@ env:
 
 jobs:
   build:
-    name: Build & test on ${{ matrix.os }} with ${{ matrix.compiler }}
+    name: Build & test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,52 +23,12 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v4
-      with:
-        archives: 'qtbase icu'
-        version: 6.6.*
+    # CMAKE_BUILD_TYPE for single-config generators, --config / -C for Visual Studio
+    - name: Configure
+      run: cmake -S tests -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }}
 
-    - name: Setup MSVC Developer Command Prompt
-      if: startsWith(matrix.os, 'windows')
-      uses: ilammy/msvc-dev-cmd@v1
-
-    - name: Windows
-      if: startsWith(matrix.os, 'windows')
-      shell: cmd
-      run: |
-        %QT_ROOT_DIR%\bin\qmake.exe -v
-        pushd tests
-        %QT_ROOT_DIR%\bin\qmake.exe -tp vc -r
-        msbuild /t:Build /p:Configuration=Release
-
-    - name: Mac
-      if: startsWith(matrix.os, 'macos')
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: |
-        clang --version
-        pushd tests
-        $QT_ROOT_DIR/bin/qmake -r
-        make -j$(sysctl -n hw.ncpu)
-
-    - name: Linux
-      if: startsWith(matrix.os, 'ubuntu')
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: |
-        g++ --version
-        pushd tests
-        $QT_ROOT_DIR/bin/qmake -r
-        make -j$(nproc)
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_CONFIGURATION }} --parallel
 
     - name: Test run
-      if: startsWith(matrix.os, 'macos')
-      run: ./tests/bin/release/thin_io_testapp.app/Contents/MacOS/thin_io_testapp
-      
-    - name: Test run
-      if: startsWith(matrix.os, 'ubuntu')
-      run: ./tests/bin/release/thin_io_testapp
-
-    - name: Test run
-      if: startsWith(matrix.os, 'windows')
-      run: ./tests/bin/release/thin_io_testapp.exe
-    
+      run: ctest --test-dir build -C ${{ env.BUILD_CONFIGURATION }} -V --no-tests=error

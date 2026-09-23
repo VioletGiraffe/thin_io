@@ -1,5 +1,5 @@
-# 3.20 for cxx_std_23
-cmake_minimum_required(VERSION 3.20)
+# 3.25 for MSVC_DEBUG_INFORMATION_FORMAT
+cmake_minimum_required(VERSION 3.25)
 
 project(thin_io-tests LANGUAGES CXX)
 
@@ -35,10 +35,14 @@ set_target_properties(${TARGET_NAME} PROPERTIES CXX_EXTENSIONS OFF)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../3rdparty)
 
 thin_io_add_gcc_clang_options(${TARGET_NAME})
+thin_io_add_msvc_options(${TARGET_NAME})
 
 if (MSVC)
-	target_compile_options(${TARGET_NAME} PRIVATE /permissive- /Zc:__cplusplus /Zc:char8_t /MP /FS /W4 /wd4251)
-	target_compile_definitions(${TARGET_NAME} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _SCL_SECURE_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+	target_compile_options(${TARGET_NAME} PRIVATE /Zc:char8_t /FS /wd4251)
+	target_compile_definitions(${TARGET_NAME} PRIVATE _SCL_SECURE_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+	# /ZI in Debug, /Zi otherwise
+	set_target_properties(${TARGET_NAME} PROPERTIES MSVC_DEBUG_INFORMATION_FORMAT $<IF:$<CONFIG:Debug>,EditAndContinue,ProgramDatabase>)
+	target_link_options(${TARGET_NAME} PRIVATE /DEBUG $<$<CONFIG:Debug>:/INCREMENTAL> "$<$<CONFIG:Release>:/OPT:REF;/OPT:ICF;/TIME>")
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 	target_compile_options(${TARGET_NAME} PRIVATE -ggdb3)
 endif()

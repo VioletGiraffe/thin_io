@@ -26,7 +26,7 @@ OBJECTS_DIR = ../build/$${OUTPUT_DIR}
 
 !mac*:*g++*:QMAKE_CXXFLAGS += -fconcepts
 *msvc*{
-	QMAKE_CXXFLAGS += /Zi
+	QMAKE_CXXFLAGS += /Zi /utf-8
 	Debug:QMAKE_CXXFLAGS += /JMC
 	QMAKE_CXXFLAGS_WARN_ON += /we4715 /we4716 # not all control paths return a value / must return a value
 	QMAKE_CXXFLAGS_WARN_ON += /we4172         # returning address of local variable or temporary

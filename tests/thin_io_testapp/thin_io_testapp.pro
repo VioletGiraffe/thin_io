@@ -39,7 +39,7 @@ win*{
 
 	Release:QMAKE_CXXFLAGS += /Zi
 
-	Release:QMAKE_LFLAGS += /OPT:REF /OPT:ICF /INCREMENTAL /TIME
+	Release:QMAKE_LFLAGS += /OPT:REF /OPT:ICF /TIME
 }
 
 linux*|mac*|freebsd{
