@@ -804,6 +804,90 @@ TEST_CASE("Windows remove_entry removes a junction or a symbolic link and leaves
 	REQUIRE(removeDirectory(directoryPath));
 }
 
+TEST_CASE("Windows remove_entry removes a symbolic link whose flavor does not match its target", "[fs][remove][windows][link]")
+{
+	static constexpr wchar_t directoryPath[] = L"remove-entry-mismatched-links";
+	static constexpr wchar_t targetDirectoryPath[] = L"remove-entry-mismatched-links\\target.dir";
+	static constexpr wchar_t targetFilePath[] = L"remove-entry-mismatched-links\\target.file";
+	static constexpr wchar_t fileLinkToDirectoryPath[] = L"remove-entry-mismatched-links\\file-link-to-directory";
+	static constexpr wchar_t directoryLinkToFilePath[] = L"remove-entry-mismatched-links\\directory-link-to-file";
+	(void)remove_entry(fileLinkToDirectoryPath);
+	(void)remove_entry(directoryLinkToFilePath);
+	file::delete_file(targetFilePath);
+	removeDirectory(targetDirectoryPath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createDirectory(targetDirectoryPath));
+	file target;
+	REQUIRE(target.open(targetFilePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(target.close());
+
+	static constexpr DWORD allowUnprivilegedCreate = 0x2;
+	if (::CreateSymbolicLinkW(fileLinkToDirectoryPath, L"target.dir", allowUnprivilegedCreate) == 0)
+	{
+		WARN("Symbolic-link creation is unavailable; mismatched-link removal assertion skipped");
+		REQUIRE(file::delete_file(targetFilePath));
+		REQUIRE(removeDirectory(targetDirectoryPath));
+		REQUIRE(removeDirectory(directoryPath));
+		return;
+	}
+	REQUIRE(::CreateSymbolicLinkW(directoryLinkToFilePath, L"target.file", SYMBOLIC_LINK_FLAG_DIRECTORY | allowUnprivilegedCreate) != 0);
+
+	// Each link's own kind is the opposite of what following it reports.
+	const auto fileLink = get_directory_entry(fileLinkToDirectoryPath);
+	const auto directoryLink = get_directory_entry(directoryLinkToFilePath);
+	REQUIRE(fileLink);
+	REQUIRE(directoryLink);
+	CHECK(fileLink->attributes.kind == entry_kind::regular_file);
+	CHECK(directoryLink->attributes.kind == entry_kind::directory);
+
+	REQUIRE(remove_entry(fileLinkToDirectoryPath));
+	REQUIRE(remove_entry(directoryLinkToFilePath));
+	CHECK_FALSE(get_entry_status(fileLinkToDirectoryPath, link_behavior::do_not_follow));
+	CHECK_FALSE(get_entry_status(directoryLinkToFilePath, link_behavior::do_not_follow));
+	CHECK(get_entry_status(targetDirectoryPath, link_behavior::do_not_follow));
+	CHECK(get_entry_status(targetFilePath, link_behavior::do_not_follow));
+
+	REQUIRE(file::delete_file(targetFilePath));
+	REQUIRE(removeDirectory(targetDirectoryPath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("Windows rename_entry renames a junction and leaves its target", "[fs][rename][windows][link]")
+{
+	static constexpr wchar_t directoryPath[] = L"rename-entry-junction";
+	static constexpr wchar_t targetPath[] = L"rename-entry-junction\\target.dir";
+	static constexpr wchar_t targetFilePath[] = L"rename-entry-junction\\target.dir\\kept.file";
+	static constexpr wchar_t junctionPath[] = L"rename-entry-junction\\junction.dir";
+	static constexpr wchar_t renamedJunctionPath[] = L"rename-entry-junction\\renamed.dir";
+	removeDirectory(junctionPath);
+	removeDirectory(renamedJunctionPath);
+	file::delete_file(targetFilePath);
+	removeDirectory(targetPath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createDirectory(targetPath));
+	file kept;
+	REQUIRE(kept.open(targetFilePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(kept.close());
+	REQUIRE(createJunction(junctionPath, targetPath));
+
+	REQUIRE(rename_entry(junctionPath, renamedJunctionPath, existing_destination::fail));
+	CHECK_FALSE(get_entry_status(junctionPath, link_behavior::do_not_follow));
+	const auto renamed = get_entry_status(renamedJunctionPath, link_behavior::do_not_follow);
+	REQUIRE(renamed);
+	CHECK(renamed->attributes.is_link);
+	CHECK(renamed->attributes.reparse_tag == IO_REPARSE_TAG_MOUNT_POINT);
+	CHECK(get_entry_status(targetFilePath, link_behavior::do_not_follow));
+	// The junction still resolves: its stored target is absolute, so moving the link does not break it.
+	CHECK(get_entry_status(L"rename-entry-junction\\renamed.dir\\kept.file", link_behavior::do_not_follow));
+
+	REQUIRE(removeDirectory(renamedJunctionPath));
+	REQUIRE(file::delete_file(targetFilePath));
+	REQUIRE(removeDirectory(targetPath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
 TEST_CASE("Windows directory enumeration reports a non-surrogate reparse point with its tag but not as a link", "[fs][directory][windows]")
 {
 	static constexpr wchar_t directoryPath[] = L"list-directory-non-link-reparse";
