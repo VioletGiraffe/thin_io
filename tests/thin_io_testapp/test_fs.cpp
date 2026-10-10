@@ -453,3 +453,113 @@ TEST_CASE("POSIX remove_entry removes a symbolic link and leaves its target", "[
 	REQUIRE(removeDirectory(targetPath));
 }
 #endif
+
+TEST_CASE("create_directory creates one directory and fails on an existing path or a missing parent", "[fs][create]")
+{
+	static constexpr char directoryPath[] = "create-directory";
+	static constexpr char orphanPath[] = "create-directory-missing-parent/child";
+	removeDirectory(directoryPath);
+
+	REQUIRE(create_directory(directoryPath));
+	const auto created = get_entry_status(directoryPath, link_behavior::do_not_follow);
+	REQUIRE(created);
+	CHECK(created->attributes.kind == entry_kind::directory);
+
+	const auto existing = create_directory(directoryPath);
+	const auto orphan = create_directory(orphanPath);
+	REQUIRE_FALSE(existing);
+	REQUIRE_FALSE(orphan);
+#ifdef _WIN32
+	CHECK(existing.error().native_code == ERROR_ALREADY_EXISTS);
+	CHECK(orphan.error().native_code == ERROR_PATH_NOT_FOUND);
+#else
+	CHECK(existing.error().native_code == EEXIST);
+	CHECK(orphan.error().native_code == ENOENT);
+#endif
+	CHECK_FALSE(create_directory(static_cast<const char*>(nullptr)));
+
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("rename_entry fails on or replaces an existing destination as requested", "[fs][rename]")
+{
+	static constexpr char sourcePath[] = "rename-entry-source.file";
+	static constexpr char destinationPath[] = "rename-entry-destination.file";
+	static constexpr char directoryPath[] = "rename-entry-destination.dir";
+	file::delete_file(sourcePath);
+	file::delete_file(destinationPath);
+	removeDirectory(directoryPath);
+	REQUIRE(createEmptyFile(sourcePath));
+
+	const auto renamed = rename_entry(sourcePath, destinationPath, existing_destination::fail);
+#ifndef _WIN32
+	if (!renamed && (renamed.error().native_code == EINVAL || renamed.error().native_code == ENOSYS || renamed.error().native_code == ENOTSUP))
+	{
+		WARN("The test filesystem has no exclusive rename; rename_entry assertions skipped");
+		REQUIRE(file::delete_file(sourcePath));
+		return;
+	}
+#endif
+	REQUIRE(renamed);
+	CHECK_FALSE(get_entry_status(sourcePath, link_behavior::do_not_follow));
+	CHECK(get_entry_status(destinationPath, link_behavior::do_not_follow));
+
+	file source;
+	REQUIRE(source.open(sourcePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(source.write("new", 3) == 3);
+	REQUIRE(source.close());
+
+	const auto occupied = rename_entry(sourcePath, destinationPath, existing_destination::fail);
+	REQUIRE_FALSE(occupied);
+#ifdef _WIN32
+	CHECK(occupied.error().native_code == ERROR_ALREADY_EXISTS);
+#else
+	CHECK(occupied.error().native_code == EEXIST);
+#endif
+	CHECK(get_entry_status(sourcePath, link_behavior::do_not_follow));
+
+	REQUIRE(rename_entry(sourcePath, destinationPath, existing_destination::replace));
+	CHECK_FALSE(get_entry_status(sourcePath, link_behavior::do_not_follow));
+	const auto replaced = get_entry_status(destinationPath, link_behavior::do_not_follow);
+	REQUIRE(replaced);
+	CHECK(replaced->logical_size == 3);
+
+	REQUIRE(createDirectory(directoryPath));
+	const auto ontoDirectory = rename_entry(destinationPath, directoryPath, existing_destination::replace);
+	REQUIRE_FALSE(ontoDirectory);
+#ifdef _WIN32
+	CHECK(ontoDirectory.error().native_code == ERROR_ACCESS_DENIED);
+#else
+	CHECK(ontoDirectory.error().native_code == EISDIR);
+#endif
+
+	CHECK_FALSE(rename_entry(static_cast<const char*>(nullptr), destinationPath, existing_destination::replace));
+	CHECK_FALSE(rename_entry(destinationPath, sourcePath, static_cast<existing_destination>(255)));
+	CHECK(get_entry_status(destinationPath, link_behavior::do_not_follow));
+
+	REQUIRE(file::delete_file(destinationPath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+#ifndef _WIN32
+TEST_CASE("POSIX rename_entry renames a symbolic link and leaves its target", "[fs][rename][link]")
+{
+	static constexpr char targetPath[] = "rename-entry-target.dir";
+	static constexpr char linkPath[] = "rename-entry-link";
+	static constexpr char renamedLinkPath[] = "rename-entry-link-renamed";
+	::unlink(linkPath);
+	::unlink(renamedLinkPath);
+	removeDirectory(targetPath);
+	REQUIRE(createDirectory(targetPath));
+	REQUIRE(::symlink(targetPath, linkPath) == 0);
+
+	REQUIRE(rename_entry(linkPath, renamedLinkPath, existing_destination::replace));
+	const auto renamedLink = get_entry_status(renamedLinkPath, link_behavior::do_not_follow);
+	REQUIRE(renamedLink);
+	CHECK(renamedLink->attributes.is_link);
+	CHECK(get_entry_status(targetPath, link_behavior::do_not_follow));
+
+	REQUIRE(::unlink(renamedLinkPath) == 0);
+	REQUIRE(removeDirectory(targetPath));
+}
+#endif

@@ -76,6 +76,24 @@ namespace thin_io {
 [[nodiscard]] filesystem_result<void> set_permissions(const wchar_t* path, file_permissions permissions, link_behavior linkBehavior) noexcept;
 #endif
 
+// Creates one directory. Fails when the path already exists, or when its parent does not.
+[[nodiscard]] filesystem_result<void> create_directory(const char* path) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<void> create_directory(const wchar_t* path) noexcept;
+#endif
+
+// Renames the entry itself within one filesystem: a link is renamed, not its target, and nothing is ever copied.
+// existing_destination::fail - one atomic call that fails when destination exists.
+//   Windows: another name of the source itself, such as a case respelling or a hard link, does not count as existing.
+//   POSIX: ENOSYS on a platform without such a call; a filesystem that lacks it reports EINVAL or ENOTSUP.
+// existing_destination::replace - atomically replaces a file or a link at destination.
+//   Windows: never replaces a directory.
+//   POSIX: a directory also replaces an empty directory.
+[[nodiscard]] filesystem_result<void> rename_entry(const char* source, const char* destination, existing_destination ifDestinationExists) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<void> rename_entry(const wchar_t* source, const wchar_t* destination, existing_destination ifDestinationExists) noexcept;
+#endif
+
 // Removes the entry itself: a file, an empty directory, or a link of any kind, never the link's target.
 // Fails on a non-empty directory, and on a Windows read-only file.
 [[nodiscard]] filesystem_result<void> remove_entry(const char* path) noexcept;

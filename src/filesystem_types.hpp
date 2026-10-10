@@ -150,4 +150,10 @@ enum class link_behavior : uint8_t {
 	do_not_follow
 };
 
+// What rename_entry() does when its destination already exists.
+enum class existing_destination : uint8_t {
+	fail,
+	replace
+};
+
 } // namespace thin_io

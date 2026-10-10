@@ -455,6 +455,46 @@ template <class Character>
 }
 
 template <class Character>
+[[nodiscard]] filesystem_result<void> createDirectory(const Character* path) noexcept
+{
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	if (::CreateDirectoryW(nativePath.c_str(), nullptr) == 0)
+		return std::unexpected{capture_last_filesystem_error()};
+	return {};
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<void> renameEntry(const Character* source, const Character* destination, const existing_destination ifDestinationExists) noexcept
+{
+	DWORD flags = 0;
+	switch (ifDestinationExists)
+	{
+	case existing_destination::fail:
+		break;
+	case existing_destination::replace:
+		flags = MOVEFILE_REPLACE_EXISTING;
+		break;
+	default:
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
+	}
+
+	windows_path_buffer sourcePath{source};
+	if (!sourcePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = sourcePath.error_code() }};
+	windows_path_buffer destinationPath{destination};
+	if (!destinationPath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = destinationPath.error_code() }};
+
+	// No MOVEFILE_COPY_ALLOWED: another volume fails with ERROR_NOT_SAME_DEVICE.
+	if (::MoveFileExW(sourcePath.c_str(), destinationPath.c_str(), flags) == 0)
+		return std::unexpected{capture_last_filesystem_error()};
+	return {};
+}
+
+template <class Character>
 [[nodiscard]] filesystem_result<void> removeEntry(const Character* path) noexcept
 {
 	windows_path_buffer nativePath{path};
@@ -671,6 +711,26 @@ filesystem_result<void> set_permissions(const char* path, const file_permissions
 filesystem_result<void> set_permissions(const wchar_t* path, const file_permissions permissions, const link_behavior linkBehavior) noexcept
 {
 	return setPermissionsForPath(path, permissions, linkBehavior);
+}
+
+filesystem_result<void> create_directory(const char* path) noexcept
+{
+	return createDirectory(path);
+}
+
+filesystem_result<void> create_directory(const wchar_t* path) noexcept
+{
+	return createDirectory(path);
+}
+
+filesystem_result<void> rename_entry(const char* source, const char* destination, const existing_destination ifDestinationExists) noexcept
+{
+	return renameEntry(source, destination, ifDestinationExists);
+}
+
+filesystem_result<void> rename_entry(const wchar_t* source, const wchar_t* destination, const existing_destination ifDestinationExists) noexcept
+{
+	return renameEntry(source, destination, ifDestinationExists);
 }
 
 filesystem_result<void> remove_entry(const char* path) noexcept

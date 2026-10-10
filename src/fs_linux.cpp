@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>    // AT_FDCWD
+#include <stdio.h>    // rename, renameat2, renamex_np
 #include <string.h>
 #include <sys/stat.h> // utimensat, UTIME_OMIT
 #include <sys/statvfs.h>
@@ -477,6 +478,45 @@ filesystem_result<void> set_permissions(const char* const path, const file_permi
 
 	// The mask guards against a caller passing a raw st_mode with file-type bits
 	if (::fchmodat(AT_FDCWD, path, static_cast<mode_t>(permissions.mode & 07777u), *linkFlag) != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	return {};
+}
+
+filesystem_result<void> create_directory(const char* const path) noexcept
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	if (::mkdir(path, 0777) != 0)
+		return std::unexpected{capture_last_filesystem_error()};
+	return {};
+}
+
+filesystem_result<void> rename_entry(const char* const source, const char* const destination, const existing_destination ifDestinationExists) noexcept
+{
+	if (source == nullptr || destination == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	int result = 0;
+	switch (ifDestinationExists)
+	{
+	case existing_destination::fail:
+#if defined(__linux__)
+		result = ::renameat2(AT_FDCWD, source, AT_FDCWD, destination, RENAME_NOREPLACE);
+#elif defined(__APPLE__)
+		result = ::renamex_np(source, destination, RENAME_EXCL);
+#else
+		return std::unexpected{filesystem_error{ .native_code = ENOSYS }};
+#endif
+		break;
+	case existing_destination::replace:
+		result = ::rename(source, destination);
+		break;
+	default:
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+	}
+
+	if (result != 0)
 		return std::unexpected{capture_last_filesystem_error()};
 	return {};
 }

@@ -126,6 +126,11 @@ and volume serial number where the filesystem exposes them. POSIX stores the dev
 name of a hard-linked file on Windows. It is the cheap query: use `get_entry_metadata()` for identity, allocation
 and hard-link count.
 
+`create_directory()` creates one directory, and `rename_entry()` renames one entry within a filesystem, never copying.
+`rename_entry()` takes an explicit `existing_destination`: `fail` is the platform's atomic exclusive rename, and
+`replace` atomically replaces a file or a link. Where a platform or filesystem has no exclusive rename, `fail` reports
+that as an error and leaves the fallback to the caller.
+
 `remove_entry()` removes whatever the path names: a file, an empty directory, or a link of any kind. A link's
 target is never removed. On Windows it uses POSIX delete semantics where the filesystem supports them, so the name
 disappears at once even while another process holds the entry open.
