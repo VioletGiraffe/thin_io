@@ -69,6 +69,13 @@ namespace thin_io {
 [[nodiscard]] filesystem_result<void> set_permissions(const wchar_t* path, file_permissions permissions, link_behavior linkBehavior) noexcept;
 #endif
 
+// Removes the entry itself: a file, an empty directory, or a link of any kind, never the link's target.
+// Fails on a non-empty directory, and on a Windows read-only file.
+[[nodiscard]] filesystem_result<void> remove_entry(const char* path) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<void> remove_entry(const wchar_t* path) noexcept;
+#endif
+
 // Reports space for the filesystem containing directoryPath. Symbolic links and reparse points are followed.
 [[nodiscard]] filesystem_result<filesystem_space> get_filesystem_space(const char* directoryPath) noexcept;
 #ifdef _WIN32

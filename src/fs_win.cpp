@@ -424,6 +424,39 @@ template <class Character>
 }
 
 template <class Character>
+[[nodiscard]] filesystem_result<void> removeEntry(const Character* path) noexcept
+{
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	// FILE_FLAG_OPEN_REPARSE_POINT: the handle is the link itself, of either flavor, and deleting it leaves the target alone.
+	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	file_handle handle{nativeHandle};
+
+	// POSIX semantics: the name is gone at once, not when the last handle another process holds is closed.
+	FILE_DISPOSITION_INFO_EX posixDisposition{ FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS };
+	if (::SetFileInformationByHandle(nativeHandle, FileDispositionInfoEx, &posixDisposition, sizeof(posixDisposition)) == 0)
+	{
+		const filesystem_error error = capture_last_filesystem_error();
+		// Filesystems other than NTFS do not implement the extended disposition.
+		if (error.native_code != ERROR_INVALID_PARAMETER && error.native_code != ERROR_INVALID_FUNCTION && error.native_code != ERROR_NOT_SUPPORTED)
+			return std::unexpected{error};
+
+		FILE_DISPOSITION_INFO disposition{ TRUE };
+		if (::SetFileInformationByHandle(nativeHandle, FileDispositionInfo, &disposition, sizeof(disposition)) == 0) [[unlikely]]
+			return std::unexpected{capture_last_filesystem_error()};
+	}
+
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return {};
+}
+
+template <class Character>
 [[nodiscard]] filesystem_result<filesystem_space> getFilesystemSpace(const Character* directoryPath) noexcept
 {
 	windows_path_buffer nativePath{directoryPath};
@@ -597,6 +630,16 @@ filesystem_result<void> set_permissions(const char* path, const file_permissions
 filesystem_result<void> set_permissions(const wchar_t* path, const file_permissions permissions, const link_behavior linkBehavior) noexcept
 {
 	return setPermissionsForPath(path, permissions, linkBehavior);
+}
+
+filesystem_result<void> remove_entry(const char* path) noexcept
+{
+	return removeEntry(path);
+}
+
+filesystem_result<void> remove_entry(const wchar_t* path) noexcept
+{
+	return removeEntry(path);
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* directoryPath) noexcept

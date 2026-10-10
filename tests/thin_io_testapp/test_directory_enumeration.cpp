@@ -727,6 +727,45 @@ TEST_CASE("Windows directory enumeration reports a junction as a linked director
 	REQUIRE(removeDirectory(directoryPath));
 }
 
+TEST_CASE("Windows remove_entry removes a junction or a symbolic link and leaves its target", "[fs][remove][windows][link]")
+{
+	static constexpr wchar_t directoryPath[] = L"remove-entry-links";
+	static constexpr wchar_t targetPath[] = L"remove-entry-links\\target.dir";
+	static constexpr wchar_t targetFilePath[] = L"remove-entry-links\\target.dir\\kept.file";
+	static constexpr wchar_t junctionPath[] = L"remove-entry-links\\junction.dir";
+	static constexpr wchar_t symlinkPath[] = L"remove-entry-links\\symlink.file";
+	file::delete_file(symlinkPath);
+	removeDirectory(junctionPath);
+	file::delete_file(targetFilePath);
+	removeDirectory(targetPath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createDirectory(targetPath));
+	file kept;
+	REQUIRE(kept.open(targetFilePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(kept.close());
+	REQUIRE(createJunction(junctionPath, targetPath));
+
+	// The target is not empty: removing the junction as anything but the link itself would fail or lose kept.file.
+	REQUIRE(remove_entry(junctionPath));
+	CHECK_FALSE(get_entry_status(junctionPath, link_behavior::do_not_follow));
+	CHECK(get_entry_status(targetFilePath, link_behavior::do_not_follow));
+
+	static constexpr DWORD allowUnprivilegedCreate = 0x2;
+	if (::CreateSymbolicLinkW(symlinkPath, L"target.dir\\kept.file", allowUnprivilegedCreate) == 0)
+		WARN("Symbolic-link creation is unavailable; Windows symbolic-link removal assertion skipped");
+	else
+	{
+		REQUIRE(remove_entry(symlinkPath));
+		CHECK_FALSE(get_entry_status(symlinkPath, link_behavior::do_not_follow));
+		CHECK(get_entry_status(targetFilePath, link_behavior::do_not_follow));
+	}
+
+	REQUIRE(file::delete_file(targetFilePath));
+	REQUIRE(removeDirectory(targetPath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
 TEST_CASE("Windows directory enumeration reports a non-surrogate reparse point with its tag but not as a link", "[fs][directory][windows]")
 {
 	static constexpr wchar_t directoryPath[] = L"list-directory-non-link-reparse";

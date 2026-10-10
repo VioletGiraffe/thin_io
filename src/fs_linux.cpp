@@ -8,6 +8,7 @@
 #include <sys/stat.h> // utimensat, UTIME_OMIT
 #include <sys/statvfs.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <limits>
@@ -24,7 +25,6 @@
 
 #ifdef __APPLE__
 #include <sys/attr.h> // setattrlist, ATTR_CMN_CRTIME
-#include <unistd.h>
 #endif
 
 namespace thin_io {
@@ -464,6 +464,27 @@ filesystem_result<void> set_permissions(const char* const path, const file_permi
 	if (::fchmodat(AT_FDCWD, path, static_cast<mode_t>(permissions.mode & 07777u), *linkFlag) != 0) [[unlikely]]
 		return std::unexpected{capture_last_filesystem_error()};
 	return {};
+}
+
+filesystem_result<void> remove_entry(const char* const path) noexcept
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	if (::unlink(path) == 0)
+		return {};
+
+	// unlink() of a directory: EISDIR on Linux, EPERM as POSIX specifies it.
+	const filesystem_error unlinkError = capture_last_filesystem_error();
+	if (unlinkError.native_code != EISDIR && unlinkError.native_code != EPERM)
+		return std::unexpected{unlinkError};
+
+	if (::rmdir(path) == 0)
+		return {};
+
+	// ENOTDIR: the entry is not a directory, so EPERM was unlink()'s real failure.
+	const filesystem_error rmdirError = capture_last_filesystem_error();
+	return std::unexpected{rmdirError.native_code == ENOTDIR ? unlinkError : rmdirError};
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* const directoryPath) noexcept

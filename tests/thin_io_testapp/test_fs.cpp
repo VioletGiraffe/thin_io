@@ -395,3 +395,61 @@ TEST_CASE("set_times ignores a creation time the platform cannot write", "[fs]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 #endif
+
+TEST_CASE("remove_entry removes a file and an empty directory, and refuses a non-empty one", "[fs][remove]")
+{
+	static constexpr char directoryPath[] = "remove-entry";
+	static constexpr char filePath[] = "remove-entry/file.bin";
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createEmptyFile(filePath));
+
+	const auto nonEmpty = remove_entry(directoryPath);
+	REQUIRE_FALSE(nonEmpty);
+#ifdef _WIN32
+	CHECK(nonEmpty.error().native_code == ERROR_DIR_NOT_EMPTY);
+
+	REQUIRE(set_permissions(filePath, file_permissions{ .read_only = true }, link_behavior::do_not_follow));
+	const auto readOnly = remove_entry(filePath);
+	REQUIRE_FALSE(readOnly);
+	CHECK(readOnly.error().native_code == ERROR_ACCESS_DENIED);
+	REQUIRE(set_permissions(filePath, file_permissions{}, link_behavior::do_not_follow));
+#else
+	CHECK((nonEmpty.error().native_code == ENOTEMPTY || nonEmpty.error().native_code == EEXIST));
+#endif
+
+	REQUIRE(remove_entry(filePath));
+	const auto missing = remove_entry(filePath);
+	REQUIRE_FALSE(missing);
+#ifdef _WIN32
+	CHECK(missing.error().native_code == ERROR_FILE_NOT_FOUND);
+#else
+	CHECK(missing.error().native_code == ENOENT);
+#endif
+
+	REQUIRE(remove_entry(directoryPath));
+	CHECK_FALSE(get_entry_status(directoryPath, link_behavior::do_not_follow));
+
+	CHECK_FALSE(remove_entry(static_cast<const char*>(nullptr)));
+}
+
+#ifndef _WIN32
+TEST_CASE("POSIX remove_entry removes a symbolic link and leaves its target", "[fs][remove][link]")
+{
+	static constexpr char targetPath[] = "remove-entry-target.dir";
+	static constexpr char linkPath[] = "remove-entry-link";
+	::unlink(linkPath);
+	removeDirectory(targetPath);
+	REQUIRE(createDirectory(targetPath));
+	REQUIRE(::symlink(targetPath, linkPath) == 0);
+
+	REQUIRE(remove_entry(linkPath));
+	CHECK_FALSE(get_entry_status(linkPath, link_behavior::do_not_follow));
+	const auto target = get_entry_status(targetPath, link_behavior::do_not_follow);
+	REQUIRE(target);
+	CHECK(target->attributes.kind == entry_kind::directory);
+
+	REQUIRE(removeDirectory(targetPath));
+}
+#endif
