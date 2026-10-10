@@ -580,6 +580,28 @@ struct mount_point_reparse_buffer final {
 	return set;
 }
 
+// A non-Microsoft tag requires the GUID buffer layout. No filter owns it, so the entry opens only as the reparse point itself.
+[[nodiscard]] bool setThirdPartyReparsePoint(const wchar_t* const path, const DWORD tag)
+{
+	windows_path_buffer preparedPath{path};
+	if (!preparedPath)
+		return false;
+	const HANDLE handle = ::CreateFileW(preparedPath.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (handle == INVALID_HANDLE_VALUE)
+		return false;
+
+	REPARSE_GUID_DATA_BUFFER reparse{};
+	reparse.ReparseTag = tag;
+	reparse.ReparseDataLength = 1;
+	reparse.ReparseGuid = {0x6f1c3a52, 0x1d4e, 0x4b8a, {0x9c, 0x31, 0x2e, 0x7d, 0x5a, 0x40, 0x8b, 0x16}};
+	DWORD ignored = 0;
+	const bool set = ::DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, &reparse, REPARSE_GUID_DATA_BUFFER_HEADER_SIZE + reparse.ReparseDataLength,
+		nullptr, 0, &ignored, nullptr) != 0;
+	::CloseHandle(handle);
+	return set;
+}
+
 } // namespace
 
 TEST_CASE("Windows directory enumeration returns native Unicode names through both path overloads", "[fs][directory][windows]")
@@ -702,6 +724,44 @@ TEST_CASE("Windows directory enumeration reports a junction as a linked director
 
 	REQUIRE(removeDirectory(linkPath));
 	REQUIRE(removeDirectory(targetPath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("Windows directory enumeration reports a non-surrogate reparse point with its tag but not as a link", "[fs][directory][windows]")
+{
+	static constexpr wchar_t directoryPath[] = L"list-directory-non-link-reparse";
+	static constexpr wchar_t filePath[] = L"list-directory-non-link-reparse\\placeholder.file";
+	static constexpr DWORD tag = 0x00007A11; // Neither the Microsoft nor the name-surrogate bit
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	file created;
+	REQUIRE(created.open(filePath, file::access_mode::Write, file::open_disposition::CreateNew));
+	REQUIRE(created.write("data", 4) == 4);
+	REQUIRE(created.close());
+	if (!setThirdPartyReparsePoint(filePath, tag))
+	{
+		WARN("Setting a third-party reparse point is unavailable; non-link reparse assertion skipped");
+		REQUIRE(file::delete_file(filePath));
+		REQUIRE(removeDirectory(directoryPath));
+		return;
+	}
+
+	const auto listed = list_directory(directoryPath, listing_detail::full);
+	REQUIRE(listed);
+	const directory_entry* const entry = findEntry(*listed, L"placeholder.file");
+	REQUIRE(entry != nullptr);
+	CHECK(entry->attributes.kind == entry_kind::regular_file);
+	CHECK_FALSE(entry->attributes.is_link);
+	CHECK(entry->attributes.reparse_tag == tag);
+	CHECK(entry->logical_size == 4);
+	CHECK_FALSE(entry->link_target);
+
+	const auto metadata = get_entry_metadata(filePath, link_behavior::do_not_follow);
+	REQUIRE(metadata);
+	CHECK(metadata->attributes == entry->attributes);
+
+	REQUIRE(file::delete_file(filePath));
 	REQUIRE(removeDirectory(directoryPath));
 }
 

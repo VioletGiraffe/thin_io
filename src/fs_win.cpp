@@ -171,27 +171,23 @@ private:
 {
 	entry_attributes attributes;
 	attributes.kind = (nativeAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? entry_kind::directory : entry_kind::regular_file;
-	attributes.is_link = (nativeAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	const bool isReparsePoint = (nativeAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	attributes.is_link = isReparsePoint && IsReparseTagNameSurrogate(reparseTag);
 	attributes.sparse = (nativeAttributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
 	attributes.compressed = (nativeAttributes & FILE_ATTRIBUTE_COMPRESSED) != 0;
 	attributes.hidden = (nativeAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
-	attributes.reparse_tag = attributes.is_link ? reparseTag : 0;
+	attributes.reparse_tag = isReparsePoint ? reparseTag : 0;
 	return attributes;
 }
 
-[[nodiscard]] bool isNameSurrogateLink(const entry_attributes& attributes) noexcept
-{
-	return attributes.is_link && IsReparseTagNameSurrogate(attributes.reparse_tag);
-}
-
 // sizeHigh and sizeLow are ignored for directories and links: a link's own size is not its target's.
-// Other reparse points, such as WOF-compressed or cloud placeholder files, report their own size.
+// Other reparse points, such as cloud placeholder files, report their own size.
 [[nodiscard]] entry_status statusFromWindows(const DWORD nativeAttributes, const DWORD reparseTag, const DWORD sizeHigh, const DWORD sizeLow,
 	const FILETIME& creation, const FILETIME& lastAccess, const FILETIME& lastWrite) noexcept
 {
 	entry_status status;
 	status.attributes = attributesFromWindows(nativeAttributes, reparseTag);
-	if (status.attributes.kind == entry_kind::regular_file && !isNameSurrogateLink(status.attributes))
+	if (status.attributes.kind == entry_kind::regular_file && !status.attributes.is_link)
 		status.logical_size = (static_cast<uint64_t>(sizeHigh) << 32) | sizeLow;
 	status.times = timesFromWindows(creation, lastAccess, lastWrite);
 	status.permissions = file_permissions{
@@ -303,7 +299,7 @@ template <class Character>
 		if (!isDotEntry(data.cFileName))
 		{
 			directory_entry entry = entryFromFindData(data);
-			if (detail == listing_detail::full && isNameSurrogateLink(entry.attributes))
+			if (detail == listing_detail::full && entry.attributes.is_link)
 				entry.link_target = linkTargetStatus((childPathPrefix + entry.name).c_str());
 			entries.push_back(std::move(entry));
 		}
@@ -452,7 +448,7 @@ template <class Character>
 		std::move(name),
 		std::nullopt
 	};
-	if (isNameSurrogateLink(entry.attributes))
+	if (entry.attributes.is_link)
 		entry.link_target = linkTargetStatus(path);
 	return entry;
 }
@@ -492,7 +488,7 @@ template <class Character>
 		return std::unexpected{*closeError};
 
 	directory_entry entry = entryFromFindData(data);
-	if (isNameSurrogateLink(entry.attributes))
+	if (entry.attributes.is_link)
 		entry.link_target = linkTargetStatus(nativePath.c_str());
 	return entry;
 }

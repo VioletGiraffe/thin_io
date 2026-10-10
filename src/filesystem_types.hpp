@@ -74,11 +74,11 @@ struct entry_attributes {
 	// is `directory`), while a POSIX symlink is always `other`.
 	entry_kind kind = entry_kind::unknown;
 	// Bit-fields: the flags share one byte, so the struct stays 8 bytes.
-	bool is_link : 1 = false; // POSIX symbolic link or Windows reparse point.
+	bool is_link : 1 = false; // POSIX symbolic link or Windows name-surrogate reparse point (symbolic link, junction).
 	bool sparse : 1 = false;
 	bool compressed : 1 = false;
 	bool hidden : 1 = false; // Windows FILE_ATTRIBUTE_HIDDEN, or UF_HIDDEN where the platform has it; never inferred from the name.
-	uint32_t reparse_tag = 0; // Zero when the entry is not a Windows reparse point.
+	uint32_t reparse_tag = 0; // Any Windows reparse point, link or not, such as a cloud placeholder; zero otherwise.
 
 	[[nodiscard]] bool operator==(const entry_attributes&) const noexcept = default;
 };
@@ -102,7 +102,6 @@ enum class listing_detail : uint8_t {
 	full
 };
 
-// A link here is a POSIX symbolic link or a Windows name-surrogate reparse point (symbolic link, junction).
 struct directory_entry : entry_status {
 	native_string name; // Relative entry name, never a rebuilt absolute path.
 	// listing_detail::full, links only: what the link resolves to. Absent when the target cannot be reached.
