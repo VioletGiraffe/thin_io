@@ -303,7 +303,139 @@ TEST_CASE("get_entry_metadata rejects invalid input", "[fs][metadata]")
 #endif
 }
 
+TEST_CASE("set_permissions by path round-trips through get_entry_metadata", "[fs][metadata][permissions]")
+{
+	static constexpr char directoryPath[] = "entry-permissions";
+	static constexpr char filePath[] = "entry-permissions/file.bin";
+#ifdef _WIN32
+	static constexpr file_permissions changed{ .read_only = true, .hidden = true, .system = true };
+	static constexpr file_permissions original{};
+	static constexpr file_permissions changedDirectory{ .hidden = true };
+#else
+	static constexpr file_permissions changed{ .mode = 0440 };
+	static constexpr file_permissions original{ .mode = 0644 };
+	static constexpr file_permissions changedDirectory{ .mode = 0750 };
+#endif
+	(void)set_permissions(filePath, original, link_behavior::do_not_follow); // A failed earlier run may have left it read-only
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(filePath, "contents"));
+
+	REQUIRE(set_permissions(filePath, changed, link_behavior::do_not_follow));
+	const auto afterChange = get_entry_metadata(filePath, link_behavior::do_not_follow);
+	REQUIRE(afterChange);
+	CHECK(afterChange->permissions == changed);
+#ifdef _WIN32
+	CHECK((::GetFileAttributesA(filePath) & FILE_ATTRIBUTE_ARCHIVE) != 0); // Attributes outside file_permissions survive
+#endif
+
+	REQUIRE(set_permissions(filePath, original, link_behavior::follow));
+	const auto afterRestore = get_entry_metadata(filePath, link_behavior::do_not_follow);
+	REQUIRE(afterRestore);
+	CHECK(afterRestore->permissions == original);
+
+	REQUIRE(set_permissions(directoryPath, changedDirectory, link_behavior::do_not_follow));
+	const auto directory = get_entry_metadata(directoryPath, link_behavior::do_not_follow);
+	REQUIRE(directory);
+	CHECK(directory->permissions == changedDirectory);
+
+	REQUIRE(file::delete_file(filePath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("get_entry_status reports a file, a directory, and a missing entry", "[fs][status]")
+{
+	static constexpr char directoryPath[] = "entry-status";
+	static constexpr char filePath[] = "entry-status/file.bin";
+	static constexpr std::string_view contents = "status contents";
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(filePath, contents));
+
+	const auto regular = get_entry_status(filePath, link_behavior::do_not_follow);
+	REQUIRE(regular);
+	CHECK(regular->attributes.kind == entry_kind::regular_file);
+	CHECK_FALSE(regular->attributes.is_link);
+	CHECK(regular->logical_size == contents.size());
+	CHECK(regular->times.last_write.is_set());
+	REQUIRE(regular->permissions);
+	const auto metadata = get_entry_metadata(filePath, link_behavior::do_not_follow);
+	REQUIRE(metadata);
+	CHECK(*regular->permissions == metadata->permissions);
+	CHECK(get_entry_status(filePath, link_behavior::follow) == regular);
+
+	const auto directory = get_entry_status(directoryPath, link_behavior::do_not_follow);
+	REQUIRE(directory);
+	CHECK(directory->attributes.kind == entry_kind::directory);
+	CHECK_FALSE(directory->logical_size);
+
+	REQUIRE(file::delete_file(filePath));
+	const auto missing = get_entry_status(filePath, link_behavior::do_not_follow);
+	REQUIRE_FALSE(missing);
+#ifdef _WIN32
+	CHECK(missing.error().native_code == ERROR_FILE_NOT_FOUND);
+#else
+	CHECK(missing.error().native_code == ENOENT);
+#endif
+	REQUIRE(removeDirectory(directoryPath));
+}
+
+TEST_CASE("get_entry_status and set_permissions reject invalid input", "[fs][status][permissions]")
+{
+#ifdef _WIN32
+	static constexpr filesystem_error_code invalidArgument = ERROR_INVALID_PARAMETER;
+#else
+	static constexpr filesystem_error_code invalidArgument = EINVAL;
+#endif
+	const auto nullPath = set_permissions(static_cast<const char*>(nullptr), file_permissions{}, link_behavior::follow);
+	REQUIRE_FALSE(nullPath);
+	CHECK(nullPath.error().native_code == invalidArgument);
+
+	const auto invalidBehavior = set_permissions(".", file_permissions{}, static_cast<link_behavior>(255));
+	REQUIRE_FALSE(invalidBehavior);
+	CHECK(invalidBehavior.error().native_code == invalidArgument);
+
+	const auto nullStatusPath = get_entry_status(static_cast<const char*>(nullptr), link_behavior::follow);
+	REQUIRE_FALSE(nullStatusPath);
+	CHECK(nullStatusPath.error().native_code == invalidArgument);
+
+	const auto invalidStatusBehavior = get_entry_status(".", static_cast<link_behavior>(255));
+	REQUIRE_FALSE(invalidStatusBehavior);
+	CHECK(invalidStatusBehavior.error().native_code == invalidArgument);
+}
+
 #ifndef _WIN32
+TEST_CASE("POSIX set_permissions reaches a symbolic link's target only when following", "[fs][metadata][permissions][link]")
+{
+	static constexpr char targetPath[] = "entry-permissions-symlink-target.file";
+	static constexpr char linkPath[] = "entry-permissions-symlink.file";
+	::unlink(linkPath);
+	file::delete_file(targetPath);
+	REQUIRE(createFileWithContents(targetPath, "target"));
+	REQUIRE(::symlink(targetPath, linkPath) == 0);
+
+	REQUIRE(set_permissions(linkPath, file_permissions{ .mode = 0600 }, link_behavior::follow));
+	const auto followed = get_entry_metadata(targetPath, link_behavior::do_not_follow);
+	REQUIRE(followed);
+	CHECK(followed->permissions.mode == 0600);
+
+	const auto notFollowed = set_permissions(linkPath, file_permissions{ .mode = 0640 }, link_behavior::do_not_follow);
+#ifdef __linux__
+	REQUIRE_FALSE(notFollowed);
+	CHECK(notFollowed.error().native_code == EOPNOTSUPP);
+#else
+	CHECK(notFollowed);
+#endif
+	const auto target = get_entry_metadata(targetPath, link_behavior::do_not_follow);
+	REQUIRE(target);
+	CHECK(target->permissions.mode == 0600);
+
+	REQUIRE(::unlink(linkPath) == 0);
+	REQUIRE(file::delete_file(targetPath));
+}
+
 TEST_CASE("POSIX metadata explicitly follows or inspects symbolic links", "[fs][metadata][link]")
 {
 	static constexpr char targetPath[] = "entry-metadata-symlink-target.file";
@@ -325,6 +457,15 @@ TEST_CASE("POSIX metadata explicitly follows or inspects symbolic links", "[fs][
 	CHECK(link->logical_size == std::string_view{targetName}.size());
 	CHECK_FALSE(followed->attributes.is_link);
 	CHECK(followed->attributes.kind == entry_kind::regular_file);
+
+	const auto linkStatus = get_entry_status(linkPath, link_behavior::do_not_follow);
+	const auto followedStatus = get_entry_status(linkPath, link_behavior::follow);
+	REQUIRE(linkStatus);
+	REQUIRE(followedStatus);
+	CHECK(linkStatus->attributes == link->attributes);
+	CHECK(followedStatus->attributes == followed->attributes);
+	CHECK(followedStatus->logical_size == followed->logical_size);
+
 	if (!target->identity || !link->identity || !followed->identity)
 		WARN("The test filesystem does not expose stable entry identity");
 	else
@@ -399,6 +540,16 @@ TEST_CASE("Windows metadata explicitly follows or inspects reparse points", "[fs
 	CHECK(link->attributes.is_link);
 	CHECK(link->attributes.reparse_tag == IO_REPARSE_TAG_SYMLINK);
 	CHECK_FALSE(followed->attributes.is_link);
+
+	const auto linkStatus = get_entry_status(linkPath, link_behavior::do_not_follow);
+	const auto followedStatus = get_entry_status(linkPath, link_behavior::follow);
+	REQUIRE(linkStatus);
+	REQUIRE(followedStatus);
+	CHECK(linkStatus->attributes == link->attributes);
+	CHECK_FALSE(linkStatus->logical_size);
+	CHECK(followedStatus->attributes == followed->attributes);
+	CHECK(followedStatus->logical_size == followed->logical_size);
+
 	if (!target->identity || !link->identity || !followed->identity)
 		WARN("The test filesystem does not expose stable entry identity");
 	else
@@ -406,6 +557,42 @@ TEST_CASE("Windows metadata explicitly follows or inspects reparse points", "[fs
 		CHECK(followed->identity == target->identity);
 		CHECK(link->identity != target->identity);
 	}
+
+	REQUIRE(file::delete_file(linkPath));
+	REQUIRE(file::delete_file(targetPath));
+}
+
+TEST_CASE("Windows set_permissions reaches a reparse point's target only when following", "[fs][metadata][permissions][windows][link]")
+{
+	static constexpr char targetPath[] = "entry-permissions-reparse-target.file";
+	static constexpr char linkPath[] = "entry-permissions-reparse.file";
+	file::delete_file(linkPath);
+	file::delete_file(targetPath);
+	REQUIRE(createFileWithContents(targetPath, "target"));
+	static constexpr DWORD allowUnprivilegedCreate = 0x2;
+	if (::CreateSymbolicLinkA(linkPath, targetPath, allowUnprivilegedCreate) == 0)
+	{
+		WARN("Symbolic-link creation is unavailable; Windows reparse permissions assertion skipped");
+		REQUIRE(file::delete_file(targetPath));
+		return;
+	}
+
+	REQUIRE(set_permissions(linkPath, file_permissions{ .hidden = true }, link_behavior::do_not_follow));
+	auto link = get_entry_metadata(linkPath, link_behavior::do_not_follow);
+	auto target = get_entry_metadata(targetPath, link_behavior::do_not_follow);
+	REQUIRE(link);
+	REQUIRE(target);
+	CHECK(link->attributes.is_link);
+	CHECK(link->permissions == file_permissions{ .hidden = true });
+	CHECK(target->permissions == file_permissions{});
+
+	REQUIRE(set_permissions(linkPath, file_permissions{ .system = true }, link_behavior::follow));
+	link = get_entry_metadata(linkPath, link_behavior::do_not_follow);
+	target = get_entry_metadata(targetPath, link_behavior::do_not_follow);
+	REQUIRE(link);
+	REQUIRE(target);
+	CHECK(link->permissions == file_permissions{ .hidden = true });
+	CHECK(target->permissions == file_permissions{ .system = true });
 
 	REQUIRE(file::delete_file(linkPath));
 	REQUIRE(file::delete_file(targetPath));

@@ -1,4 +1,5 @@
 #include "file_win.hpp"
+#include "attributes_win.hpp"
 #include "enum_helpers.hpp"
 #include "timestamp_win.hpp"
 #include "windows_path_win.hpp"
@@ -192,26 +193,6 @@ std::optional<uint64_t> file_impl::size() const noexcept
 			static_cast<uint64_t>(li.QuadPart): std::optional<uint64_t>{};
 }
 
-// FileBasicInfo queries require FILE_READ_ATTRIBUTES, which a write-only open lacks. Attribute-only access is exempt
-// from sharing restrictions, so a temporary reopen is the universal fallback.
-[[nodiscard]] static bool queryBasicInfo(const HANDLE fileHandle, FILE_BASIC_INFO& info) noexcept
-{
-	if (::GetFileInformationByHandleEx(fileHandle, FileBasicInfo, &info, sizeof(info)) != 0)
-		return true;
-
-	const HANDLE attributeHandle = ::ReOpenFile(fileHandle, FILE_READ_ATTRIBUTES,
-		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
-	if (attributeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
-		return false;
-
-	const bool success = ::GetFileInformationByHandleEx(attributeHandle, FileBasicInfo, &info, sizeof(info)) != 0;
-	const DWORD error = success ? 0 : ::GetLastError(); // CloseHandle overwrites the thread's last error
-	::CloseHandle(attributeHandle);
-	if (!success) [[unlikely]]
-		::SetLastError(error);
-	return success;
-}
-
 std::optional<entry_times> file_impl::times() const noexcept
 {
 	FILE_BASIC_INFO info;
@@ -233,46 +214,18 @@ bool file_impl::set_times(const entry_times& times) noexcept
 	return setFileTimes(_h, times);
 }
 
-// Sets the masked attribute bits to desiredValues, leaving the bits outside the mask untouched.
-// Requires a handle with FILE_WRITE_ATTRIBUTES access, which GENERIC_WRITE includes.
-[[nodiscard]] static bool updateAttributeFlags(const HANDLE fileHandle, const DWORD mask, const DWORD desiredValues) noexcept
-{
-	FILE_BASIC_INFO info;
-	if (!queryBasicInfo(fileHandle, info)) [[unlikely]]
-		return false;
-
-	const DWORD oldAttributes = info.FileAttributes;
-	DWORD newAttributes = (oldAttributes & ~mask) | (desiredValues & mask);
-	if (newAttributes == oldAttributes)
-		return true;
-	if (newAttributes == 0)
-		newAttributes = FILE_ATTRIBUTE_NORMAL; // 0 would mean "leave the attributes unchanged"
-
-	FILE_BASIC_INFO update{}; // Zeroed timestamps are left untouched by the API
-	update.FileAttributes = newAttributes;
-	return ::SetFileInformationByHandle(fileHandle, FileBasicInfo, &update, sizeof(update)) != 0;
-}
-
 std::optional<file_permissions> file_impl::permissions() const noexcept
 {
 	FILE_BASIC_INFO info;
 	if (!queryBasicInfo(_h, info)) [[unlikely]]
 		return {};
 
-	return file_permissions{
-		.read_only = (info.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0,
-		.hidden = (info.FileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0,
-		.system = (info.FileAttributes & FILE_ATTRIBUTE_SYSTEM) != 0
-	};
+	return permissionsFromAttributes(info.FileAttributes);
 }
 
 bool file_impl::set_permissions(const file_permissions permissions) noexcept
 {
-	static constexpr DWORD mask = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
-	const DWORD desiredValues = (permissions.read_only ? FILE_ATTRIBUTE_READONLY : 0)
-		| (permissions.hidden ? FILE_ATTRIBUTE_HIDDEN : 0)
-		| (permissions.system ? FILE_ATTRIBUTE_SYSTEM : 0);
-	return updateAttributeFlags(_h, mask, desiredValues);
+	return setPermissions(_h, permissions);
 }
 
 bool file_impl::set_hidden(const bool hidden) noexcept

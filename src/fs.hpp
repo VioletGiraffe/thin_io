@@ -46,11 +46,27 @@ namespace thin_io {
 [[nodiscard]] filesystem_result<directory_entry> get_directory_entry(const wchar_t* path);
 #endif
 
+// Reports one entry itself, or with follow the target of a link, from the entry's own record: never from a directory listing.
+// Cheaper than get_entry_metadata(): Windows opens no handle unless the entry is a reparse point.
+// permissions is always set.
+[[nodiscard]] filesystem_result<entry_status> get_entry_status(const char* path, link_behavior linkBehavior) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<entry_status> get_entry_status(const wchar_t* path, link_behavior linkBehavior) noexcept;
+#endif
+
 // Reads metadata for one filesystem entry. linkBehavior explicitly selects whether a symbolic link or reparse point
 // is inspected itself or resolved to its target.
 [[nodiscard]] filesystem_result<entry_metadata> get_entry_metadata(const char* path, link_behavior linkBehavior) noexcept;
 #ifdef _WIN32
 [[nodiscard]] filesystem_result<entry_metadata> get_entry_metadata(const wchar_t* path, link_behavior linkBehavior) noexcept;
+#endif
+
+// Sets the permissions of an existing file or directory. do_not_follow never touches a link's target.
+// do_not_follow on a link: Windows and Darwin change the link itself, Linux fails with EOPNOTSUPP.
+// Linux, do_not_follow: requires /proc and glibc 2.32, otherwise fails with EOPNOTSUPP.
+[[nodiscard]] filesystem_result<void> set_permissions(const char* path, file_permissions permissions, link_behavior linkBehavior) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<void> set_permissions(const wchar_t* path, file_permissions permissions, link_behavior linkBehavior) noexcept;
 #endif
 
 // Reports space for the filesystem containing directoryPath. Symbolic links and reparse points are followed.

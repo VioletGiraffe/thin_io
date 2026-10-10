@@ -761,6 +761,17 @@ TEST_CASE("Windows directory enumeration reports a non-surrogate reparse point w
 	REQUIRE(metadata);
 	CHECK(metadata->attributes == entry->attributes);
 
+	const auto status = get_entry_status(filePath, link_behavior::do_not_follow);
+	REQUIRE(status);
+	CHECK(status->attributes == entry->attributes);
+	CHECK(status->logical_size == 4);
+
+	REQUIRE(set_permissions(filePath, file_permissions{ .read_only = true }, link_behavior::do_not_follow));
+	const auto readOnly = get_entry_status(filePath, link_behavior::do_not_follow);
+	REQUIRE(readOnly);
+	CHECK(readOnly->permissions == file_permissions{ .read_only = true });
+	REQUIRE(set_permissions(filePath, file_permissions{}, link_behavior::do_not_follow));
+
 	REQUIRE(file::delete_file(filePath));
 	REQUIRE(removeDirectory(directoryPath));
 }

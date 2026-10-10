@@ -104,7 +104,7 @@ directory cannot be listed, it reads the entry's own attributes instead.
 
 `get_entry_metadata()` requires an explicit `link_behavior`: `follow` describes the target, while `do_not_follow`
 describes the symbolic link or reparse entry itself. The result includes logical size, allocated size, hard-link
-count, attributes, an optional stable entry identity, and an optional scan-local mount identity. Linux obtains the
+count, attributes, permissions, an optional stable entry identity, and an optional scan-local mount identity. Linux obtains the
 mount identity from `statx`, which distinguishes bind mounts even though they retain the target's device ID. Other
 platforms use the available filesystem or volume identity. Mount identity is for traversal boundaries within the
 current mount namespace; it is not a persistent cross-scan identifier.
@@ -118,6 +118,14 @@ Allocated size follows the native accounting definition:
 `entry_identity` combines a filesystem identity with a 16-byte entry identity. Windows stores the full `FILE_ID_128`
 and volume serial number where the filesystem exposes them. POSIX stores the device ID and a zero-padded inode value.
 `thin_io` reports hard links and their identity but deliberately does not decide how a caller should count them.
+
+`get_entry_status()` reports the same `entry_status` a listing does, for one path and with an explicit
+`link_behavior`. It reads the entry's own record, so it is current where a listing's copy may lag, such as another
+name of a hard-linked file on Windows. It is the cheap query: use `get_entry_metadata()` for identity, allocation
+and hard-link count.
+
+`set_permissions()` applies a `file_permissions` value by path, with the same explicit `link_behavior`. With
+`do_not_follow` a link's target is never changed. On Windows only the read-only, hidden and system attributes change.
 
 ### Filesystem space
 

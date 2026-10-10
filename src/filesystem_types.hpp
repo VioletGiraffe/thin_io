@@ -124,6 +124,7 @@ struct entry_identity {
 
 struct entry_metadata {
 	entry_attributes attributes;
+	file_permissions permissions;
 	uint64_t logical_size = 0;
 	uint64_t allocated_size = 0; // Native allocation size, including sparse/compression accounting; st_blocks * 512 on POSIX.
 	uint64_t hard_link_count = 0;

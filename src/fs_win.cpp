@@ -1,4 +1,5 @@
 #include "fs.hpp"
+#include "attributes_win.hpp"
 #include "timestamp_win.hpp"
 #include "windows_path_win.hpp"
 
@@ -190,11 +191,7 @@ private:
 	if (status.attributes.kind == entry_kind::regular_file && !status.attributes.is_link)
 		status.logical_size = (static_cast<uint64_t>(sizeHigh) << 32) | sizeLow;
 	status.times = timesFromWindows(creation, lastAccess, lastWrite);
-	status.permissions = file_permissions{
-		.read_only = (nativeAttributes & FILE_ATTRIBUTE_READONLY) != 0,
-		.hidden = status.attributes.hidden,
-		.system = (nativeAttributes & FILE_ATTRIBUTE_SYSTEM) != 0
-	};
+	status.permissions = permissionsFromAttributes(nativeAttributes);
 	return status;
 }
 
@@ -207,27 +204,35 @@ private:
 	};
 }
 
-// Follows the link at path. Absent when the target cannot be reached.
-[[nodiscard]] heap_optional<entry_status> linkTargetStatus(const wchar_t* const path)
+// Follows the link at path.
+[[nodiscard]] filesystem_result<entry_status> followedStatus(const wchar_t* const path) noexcept
 {
 	const HANDLE nativeHandle = ::CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 	if (nativeHandle == INVALID_HANDLE_VALUE)
-		return {};
+		return std::unexpected{capture_last_filesystem_error()};
 	file_handle handle{nativeHandle};
 
 	BY_HANDLE_FILE_INFORMATION info;
 	if (::GetFileInformationByHandle(nativeHandle, &info) == 0) [[unlikely]]
-		return {};
+		return std::unexpected{capture_last_filesystem_error()};
 
 	// A target can itself be a reparse point, such as a cloud placeholder: its tag needs a separate query.
 	FILE_ATTRIBUTE_TAG_INFO tagInfo{};
 	if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
 		&& ::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &tagInfo, sizeof(tagInfo)) == 0) [[unlikely]]
-		return {};
+		return std::unexpected{capture_last_filesystem_error()};
 
 	return statusFromWindows(info.dwFileAttributes, tagInfo.ReparseTag, info.nFileSizeHigh, info.nFileSizeLow,
 		info.ftCreationTime, info.ftLastAccessTime, info.ftLastWriteTime);
+}
+
+// Absent when the target cannot be reached.
+[[nodiscard]] heap_optional<entry_status> linkTargetStatus(const wchar_t* const path)
+{
+	if (auto target = followedStatus(path))
+		return std::move(*target);
+	return {};
 }
 
 [[nodiscard]] bool isDotEntry(const std::wstring_view name) noexcept
@@ -331,10 +336,11 @@ template <class Character>
 	return identity;
 }
 
+// The caller closes the returned handle.
 template <class Character>
-[[nodiscard]] filesystem_result<entry_metadata> getEntryMetadata(const Character* path, const link_behavior linkBehavior) noexcept
+[[nodiscard]] filesystem_result<HANDLE> openForAttributes(const Character* path, const DWORD access, const link_behavior linkBehavior) noexcept
 {
-	DWORD openFlags = FILE_FLAG_BACKUP_SEMANTICS;
+	DWORD openFlags = FILE_FLAG_BACKUP_SEMANTICS; // Required to open a directory
 	switch (linkBehavior)
 	{
 	case link_behavior::follow:
@@ -350,10 +356,20 @@ template <class Character>
 	if (!nativePath) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
 
-	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), FILE_READ_ATTRIBUTES,
+	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), access,
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, openFlags, nullptr);
 	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
 		return std::unexpected{capture_last_filesystem_error()};
+	return nativeHandle;
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<entry_metadata> getEntryMetadata(const Character* path, const link_behavior linkBehavior) noexcept
+{
+	const auto opened = openForAttributes(path, FILE_READ_ATTRIBUTES, linkBehavior);
+	if (!opened) [[unlikely]]
+		return std::unexpected{opened.error()};
+	const HANDLE nativeHandle = *opened;
 	file_handle handle{nativeHandle};
 
 	FILE_STANDARD_INFO standardInfo{};
@@ -368,6 +384,7 @@ template <class Character>
 
 	entry_metadata metadata;
 	metadata.attributes = attributesFromWindows(attributeInfo.FileAttributes, attributeInfo.ReparseTag);
+	metadata.permissions = permissionsFromAttributes(attributeInfo.FileAttributes);
 	metadata.logical_size = static_cast<uint64_t>(standardInfo.EndOfFile.QuadPart);
 	metadata.allocated_size = static_cast<uint64_t>(standardInfo.AllocationSize.QuadPart);
 	metadata.hard_link_count = standardInfo.NumberOfLinks;
@@ -388,6 +405,22 @@ template <class Character>
 	if (const auto closeError = handle.close()) [[unlikely]]
 		return std::unexpected{*closeError};
 	return metadata;
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<void> setPermissionsForPath(const Character* path, const file_permissions permissions, const link_behavior linkBehavior) noexcept
+{
+	const auto opened = openForAttributes(path, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, linkBehavior);
+	if (!opened) [[unlikely]]
+		return std::unexpected{opened.error()};
+	file_handle handle{*opened};
+
+	if (!setPermissions(*opened, permissions)) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return {};
 }
 
 template <class Character>
@@ -424,7 +457,7 @@ template <class Character>
 
 // Reads the entry's own attributes, which needs no list access to its parent.
 // A reparse point's tag needs a handle, so a reparse point that cannot be opened fails.
-[[nodiscard]] filesystem_result<directory_entry> entryFromAttributes(const wchar_t* const path, native_string name)
+[[nodiscard]] filesystem_result<entry_status> ownStatus(const wchar_t* const path) noexcept
 {
 	WIN32_FILE_ATTRIBUTE_DATA data;
 	if (::GetFileAttributesExW(path, GetFileExInfoStandard, &data) == 0) [[unlikely]]
@@ -443,14 +476,35 @@ template <class Character>
 			return std::unexpected{capture_last_filesystem_error()};
 	}
 
-	directory_entry entry{
-		statusFromWindows(data.dwFileAttributes, tagInfo.ReparseTag, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime),
-		std::move(name),
-		std::nullopt
-	};
+	return statusFromWindows(data.dwFileAttributes, tagInfo.ReparseTag, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime);
+}
+
+[[nodiscard]] filesystem_result<directory_entry> entryFromAttributes(const wchar_t* const path, native_string name)
+{
+	auto status = ownStatus(path);
+	if (!status) [[unlikely]]
+		return std::unexpected{status.error()};
+
+	directory_entry entry{ std::move(*status), std::move(name), std::nullopt };
 	if (entry.attributes.is_link)
 		entry.link_target = linkTargetStatus(path);
 	return entry;
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<entry_status> getEntryStatus(const Character* path, const link_behavior linkBehavior) noexcept
+{
+	if (linkBehavior != link_behavior::follow && linkBehavior != link_behavior::do_not_follow) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
+
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	auto status = ownStatus(nativePath.c_str());
+	if (status && status->attributes.is_link && linkBehavior == link_behavior::follow)
+		return followedStatus(nativePath.c_str());
+	return status;
 }
 
 template <class Character>
@@ -515,6 +569,16 @@ filesystem_result<directory_entry> get_directory_entry(const wchar_t* path)
 	return getDirectoryEntry(path);
 }
 
+filesystem_result<entry_status> get_entry_status(const char* path, const link_behavior linkBehavior) noexcept
+{
+	return getEntryStatus(path, linkBehavior);
+}
+
+filesystem_result<entry_status> get_entry_status(const wchar_t* path, const link_behavior linkBehavior) noexcept
+{
+	return getEntryStatus(path, linkBehavior);
+}
+
 filesystem_result<entry_metadata> get_entry_metadata(const char* path, const link_behavior linkBehavior) noexcept
 {
 	return getEntryMetadata(path, linkBehavior);
@@ -523,6 +587,16 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* path, const lin
 filesystem_result<entry_metadata> get_entry_metadata(const wchar_t* path, const link_behavior linkBehavior) noexcept
 {
 	return getEntryMetadata(path, linkBehavior);
+}
+
+filesystem_result<void> set_permissions(const char* path, const file_permissions permissions, const link_behavior linkBehavior) noexcept
+{
+	return setPermissionsForPath(path, permissions, linkBehavior);
+}
+
+filesystem_result<void> set_permissions(const wchar_t* path, const file_permissions permissions, const link_behavior linkBehavior) noexcept
+{
+	return setPermissionsForPath(path, permissions, linkBehavior);
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* directoryPath) noexcept

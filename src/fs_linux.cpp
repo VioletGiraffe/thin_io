@@ -122,6 +122,25 @@ private:
 	return attributes;
 }
 
+[[nodiscard]] file_permissions permissionsFromMode(const mode_t mode) noexcept
+{
+	return file_permissions{ .mode = static_cast<uint32_t>(mode) & 07777u };
+}
+
+// The AT_* flag for a *at() call. Empty for a value outside the enum.
+[[nodiscard]] std::optional<int> atFlagFor(const link_behavior linkBehavior) noexcept
+{
+	switch (linkBehavior)
+	{
+	case link_behavior::follow:
+		return 0;
+	case link_behavior::do_not_follow:
+		return AT_SYMLINK_NOFOLLOW;
+	default:
+		return {};
+	}
+}
+
 template<class Inode>
 [[nodiscard]] entry_identity entryIdentity(const filesystem_identity filesystem, const Inode nativeInode) noexcept
 {
@@ -165,7 +184,7 @@ template<class Inode>
 	status.times.last_access = fromTimespec(info.st_atim);
 	status.times.last_write = fromTimespec(info.st_mtim);
 #endif
-	status.permissions = file_permissions{ .mode = static_cast<uint32_t>(info.st_mode) & 07777u };
+	status.permissions = permissionsFromMode(info.st_mode);
 	return status;
 }
 
@@ -188,7 +207,7 @@ template<class Inode>
 		status.times.last_access = fromStatxTimestamp(info.stx_atime);
 	if ((info.stx_mask & STATX_MTIME) != 0)
 		status.times.last_write = fromStatxTimestamp(info.stx_mtime);
-	status.permissions = file_permissions{ .mode = static_cast<uint32_t>(info.stx_mode) & 07777u };
+	status.permissions = permissionsFromMode(static_cast<mode_t>(info.stx_mode));
 	return status;
 }
 #endif
@@ -324,27 +343,27 @@ filesystem_result<std::vector<directory_entry>> list_directory(const char* const
 	return entries;
 }
 
+filesystem_result<entry_status> get_entry_status(const char* const path, const link_behavior linkBehavior) noexcept
+{
+	if (path == nullptr || !atFlagFor(linkBehavior)) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	return statusAt(AT_FDCWD, path, linkBehavior);
+}
+
 filesystem_result<entry_metadata> get_entry_metadata(const char* const path, const link_behavior linkBehavior) noexcept
 {
 	if (path == nullptr) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
 
 #if defined(__linux__) && defined(STATX_MNT_ID)
-	int statxFlags = 0;
-	switch (linkBehavior)
-	{
-	case link_behavior::follow:
-		break;
-	case link_behavior::do_not_follow:
-		statxFlags = AT_SYMLINK_NOFOLLOW;
-		break;
-	default:
+	const auto statxFlags = atFlagFor(linkBehavior);
+	if (!statxFlags) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
-	}
 
 	struct statx extendedInfo{};
 	constexpr unsigned int requestedFields = STATX_BASIC_STATS | STATX_MNT_ID;
-	if (::statx(AT_FDCWD, path, statxFlags, requestedFields, &extendedInfo) == 0)
+	if (::statx(AT_FDCWD, path, *statxFlags, requestedFields, &extendedInfo) == 0)
 	{
 		if ((extendedInfo.stx_mask & STATX_BASIC_STATS) != STATX_BASIC_STATS) [[unlikely]]
 			return std::unexpected{filesystem_error{ .native_code = EIO }};
@@ -355,6 +374,7 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* const path, con
 		const dev_t device = ::makedev(extendedInfo.stx_dev_major, extendedInfo.stx_dev_minor);
 		entry_metadata metadata;
 		metadata.attributes = attributesFromMode(static_cast<mode_t>(extendedInfo.stx_mode));
+		metadata.permissions = permissionsFromMode(static_cast<mode_t>(extendedInfo.stx_mode));
 		metadata.logical_size = extendedInfo.stx_size;
 		metadata.allocated_size = extendedInfo.stx_blocks * 512;
 		metadata.hard_link_count = extendedInfo.stx_nlink;
@@ -394,6 +414,7 @@ filesystem_result<entry_metadata> get_entry_metadata(const char* const path, con
 
 	entry_metadata metadata;
 	metadata.attributes = attributesFromStat(info);
+	metadata.permissions = permissionsFromMode(info.st_mode);
 	metadata.logical_size = static_cast<uint64_t>(info.st_size);
 	metadata.allocated_size = allocatedBlocks * 512;
 	metadata.hard_link_count = static_cast<uint64_t>(info.st_nlink);
@@ -428,6 +449,21 @@ filesystem_result<directory_entry> get_directory_entry(const char* const path)
 	}
 
 	return entry;
+}
+
+filesystem_result<void> set_permissions(const char* const path, const file_permissions permissions, const link_behavior linkBehavior) noexcept
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	const auto linkFlag = atFlagFor(linkBehavior);
+	if (!linkFlag) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	// The mask guards against a caller passing a raw st_mode with file-type bits
+	if (::fchmodat(AT_FDCWD, path, static_cast<mode_t>(permissions.mode & 07777u), *linkFlag) != 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	return {};
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* const directoryPath) noexcept

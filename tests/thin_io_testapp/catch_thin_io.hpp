@@ -146,6 +146,7 @@ struct StringMaker<thin_io::entry_metadata> {
 	static std::string convert(const thin_io::entry_metadata& metadata)
 	{
 		return "{ attributes: " + Detail::stringify(metadata.attributes)
+			+ ", permissions: " + Detail::stringify(metadata.permissions)
 			+ ", logical_size: " + std::to_string(metadata.logical_size)
 			+ ", allocated_size: " + std::to_string(metadata.allocated_size)
 			+ ", hard_link_count: " + std::to_string(metadata.hard_link_count)
