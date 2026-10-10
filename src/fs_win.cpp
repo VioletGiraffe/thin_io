@@ -264,6 +264,45 @@ private:
 	return isUncShareRoot(path);
 }
 
+// FindFirstFileExW also reports ERROR_FILE_NOT_FOUND when the wildcard matched nothing. Verifying the directory after
+// the failed search keeps a path removed before enumeration from being mistaken for an empty directory.
+template <class Character>
+[[nodiscard]] filesystem_result<void> verifyDirectoryExists(const Character* path) noexcept
+{
+	windows_path_buffer directoryPath{path};
+	if (!directoryPath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = directoryPath.error_code() }};
+	const DWORD attributes = ::GetFileAttributesW(directoryPath.c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_DIRECTORY }};
+	return {};
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<void> canListDirectory(const Character* path) noexcept
+{
+	windows_path_buffer searchPath{path};
+	if (!searchPath || !searchPath.append_directory_search_pattern()) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = searchPath.error_code() }};
+
+	WIN32_FIND_DATAW data;
+	const HANDLE nativeHandle = ::FindFirstFileExW(searchPath.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+	if (nativeHandle == INVALID_HANDLE_VALUE)
+	{
+		const filesystem_error enumerationError = capture_last_filesystem_error();
+		if (enumerationError.native_code != ERROR_FILE_NOT_FOUND)
+			return std::unexpected{enumerationError};
+		return verifyDirectoryExists(path);
+	}
+
+	find_handle handle{nativeHandle};
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return {};
+}
+
 template <class Character>
 [[nodiscard]] filesystem_result<std::vector<directory_entry>> listDirectory(const Character* path, const listing_detail detail)
 {
@@ -284,16 +323,8 @@ template <class Character>
 		if (enumerationError.native_code != ERROR_FILE_NOT_FOUND)
 			return std::unexpected{enumerationError};
 
-		// FindFirstFileExW also uses ERROR_FILE_NOT_FOUND when the wildcard matched nothing. Verify the directory after
-		// the failed search so a path removed before enumeration cannot be mistaken for an empty directory.
-		windows_path_buffer directoryPath{path};
-		if (!directoryPath) [[unlikely]]
-			return std::unexpected{filesystem_error{ .native_code = directoryPath.error_code() }};
-		const DWORD attributes = ::GetFileAttributesW(directoryPath.c_str());
-		if (attributes == INVALID_FILE_ATTRIBUTES) [[unlikely]]
-			return std::unexpected{capture_last_filesystem_error()};
-		if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) [[unlikely]]
-			return std::unexpected{filesystem_error{ .native_code = ERROR_DIRECTORY }};
+		if (const auto verified = verifyDirectoryExists(path); !verified) [[unlikely]]
+			return std::unexpected{verified.error()};
 		return std::vector<directory_entry>{};
 	}
 
@@ -581,6 +612,16 @@ template <class Character>
 }
 
 } // namespace
+
+filesystem_result<void> can_list_directory(const char* path) noexcept
+{
+	return canListDirectory(path);
+}
+
+filesystem_result<void> can_list_directory(const wchar_t* path) noexcept
+{
+	return canListDirectory(path);
+}
 
 filesystem_result<std::vector<directory_entry>> list_directory(const char* path, const listing_detail detail)
 {

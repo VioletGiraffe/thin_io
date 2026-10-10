@@ -295,6 +295,21 @@ template<class Inode>
 
 } // namespace
 
+filesystem_result<void> can_list_directory(const char* const path) noexcept
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	DIR* const nativeDirectory = ::opendir(path);
+	if (nativeDirectory == nullptr)
+		return std::unexpected{capture_last_filesystem_error()};
+
+	directory_handle directory{nativeDirectory};
+	if (const auto closeError = directory.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return {};
+}
+
 filesystem_result<std::vector<directory_entry>> list_directory(const char* const path, const listing_detail detail)
 {
 	if (path == nullptr) [[unlikely]]

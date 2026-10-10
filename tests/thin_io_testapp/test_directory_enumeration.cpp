@@ -183,6 +183,39 @@ TEST_CASE("list_directory captures invalid input and non-directory failures", "[
 	REQUIRE(file::delete_file(filePath));
 }
 
+TEST_CASE("can_list_directory succeeds and fails as list_directory does", "[fs][directory]")
+{
+	static constexpr char directoryPath[] = "can-list-directory";
+	static constexpr char filePath[] = "can-list-directory/file.bin";
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+
+	CHECK(can_list_directory(directoryPath)); // Empty
+	REQUIRE(createFileWithContents(filePath, {}));
+	CHECK(can_list_directory(directoryPath));
+
+	const auto fileProbe = can_list_directory(filePath);
+	const auto fileListing = list_directory(filePath);
+	REQUIRE_FALSE(fileProbe);
+	REQUIRE_FALSE(fileListing);
+	CHECK(fileProbe.error() == fileListing.error());
+
+	REQUIRE(file::delete_file(filePath));
+	REQUIRE(removeDirectory(directoryPath));
+	const auto missingProbe = can_list_directory(directoryPath);
+	const auto missingListing = list_directory(directoryPath);
+	REQUIRE_FALSE(missingProbe);
+	REQUIRE_FALSE(missingListing);
+	CHECK(missingProbe.error() == missingListing.error());
+
+	const auto nullProbe = can_list_directory(static_cast<const char*>(nullptr));
+	const auto nullListing = list_directory(static_cast<const char*>(nullptr));
+	REQUIRE_FALSE(nullProbe);
+	REQUIRE_FALSE(nullListing);
+	CHECK(nullProbe.error() == nullListing.error());
+}
+
 TEST_CASE("list_directory with full detail reports sizes, times and permissions", "[fs][directory]")
 {
 	static constexpr char directoryPath[] = "list-directory-full";
@@ -433,11 +466,16 @@ TEST_CASE("POSIX inaccessible-directory result is retained when permissions can 
 	REQUIRE(::chmod(directoryPath, 0) == 0);
 
 	const auto listed = list_directory(directoryPath);
+	const auto probed = can_list_directory(directoryPath);
 	REQUIRE(::chmod(directoryPath, 0700) == 0);
 	if (listed)
 		WARN("The test process can bypass directory permissions; inaccessible-directory assertion skipped");
 	else
+	{
 		CHECK((listed.error().native_code == EACCES || listed.error().native_code == EPERM));
+		REQUIRE_FALSE(probed);
+		CHECK(probed.error() == listed.error());
+	}
 
 	REQUIRE(removeDirectory(directoryPath));
 }

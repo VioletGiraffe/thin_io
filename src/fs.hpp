@@ -36,6 +36,13 @@ namespace thin_io {
 [[nodiscard]] filesystem_result<std::vector<directory_entry>> list_directory(const wchar_t* path, listing_detail detail = listing_detail::basic);
 #endif
 
+// Succeeds when list_directory() could start enumerating path: it is a directory, and the caller may list it.
+// Reads no entries.
+[[nodiscard]] filesystem_result<void> can_list_directory(const char* path) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<void> can_list_directory(const wchar_t* path) noexcept;
+#endif
+
 // Reports one entry as list_directory() does with listing_detail::full, without opening it: works for entries that
 // cannot be opened, such as a Windows paging file. A trailing separator is ignored.
 // name is empty for a root. Otherwise it is the path's last component on POSIX, and the filesystem's spelling on Windows.

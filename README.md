@@ -79,6 +79,8 @@ bool/optional results and native last-error access for compatibility.
 relative to the listed directory in `native_string`, and never returns a partial vector as a successful result. On
 Windows the names are UTF-16; on POSIX they preserve the bytes supplied by the filesystem.
 
+`can_list_directory()` reports whether that enumeration could start, without reading any entry.
+
 Each `directory_entry` contains its basic kind and the cheaply available sparse, compressed, hidden, and link/reparse
 attributes. `is_link` is true for POSIX symbolic links and Windows name-surrogate reparse points (symbolic links,
 junctions). Other reparse points, such as cloud placeholders, are not links. `reparse_tag` retains the exact tag of any
