@@ -106,6 +106,16 @@ enum class filesystem_kind {
 	return true;
 }
 
+// exFAT names are UTF-16: Linux refuses to create a name that is not valid UTF-8 there.
+[[nodiscard]] inline bool nonUtf8NamesUnsupported()
+{
+	if (kind() != filesystem_kind::exfat)
+		return false;
+
+	WARN("This filesystem stores names as Unicode: test skipped");
+	return true;
+}
+
 // FAT timestamps start in 1980.
 [[nodiscard]] inline bool storesTimesBefore1980() noexcept
 {

@@ -406,6 +406,9 @@ TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs
 #ifndef __APPLE__
 TEST_CASE("POSIX directory enumeration preserves native name bytes that are not valid UTF-8", "[fs][directory]")
 {
+	if (test_volume::nonUtf8NamesUnsupported())
+		return;
+
 	static constexpr char directoryPath[] = "list-directory-posix-native";
 	const std::string nativeNamePath = std::string{directoryPath} + "/\xFF";
 	file::delete_file(nativeNamePath.c_str());
