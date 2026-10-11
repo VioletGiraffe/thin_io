@@ -114,7 +114,9 @@ struct directory_entry : entry_status {
 using filesystem_identity = uint64_t;
 using mount_identity = uint64_t;
 
-// Windows uses the complete FILE_ID_128 value; POSIX stores the inode in the same zero-padded representation.
+// Windows uses the complete FILE_ID_128 value, or the zero-padded 64-bit file index where the filesystem has no FILE_ID_128.
+// POSIX stores the inode in the same zero-padded representation.
+// Not a persistent key: FAT and exFAT derive the file index from the directory entry's location, so a rename or move changes it.
 struct entry_identity {
 	filesystem_identity filesystem = 0; // Windows volume serial number or POSIX device ID.
 	std::array<uint8_t, 16> entry{};
@@ -128,7 +130,7 @@ struct entry_metadata {
 	uint64_t logical_size = 0;
 	uint64_t allocated_size = 0; // Native allocation size, including sparse/compression accounting; st_blocks * 512 on POSIX.
 	uint64_t hard_link_count = 0;
-	std::optional<entry_identity> identity; // Absent when a Windows filesystem does not expose FILE_ID_128.
+	std::optional<entry_identity> identity; // Absent when a Windows filesystem exposes neither FILE_ID_128 nor a non-zero file index.
 	// Identifies a mounted view during traversal. Linux uses statx mount IDs so bind mounts differ despite sharing st_dev;
 	// other platforms use the available filesystem/volume identity. Do not persist this as a cross-scan identity.
 	std::optional<mount_identity> mount_id;
@@ -140,7 +142,7 @@ struct filesystem_space {
 	uint64_t capacity = 0; // Total capacity visible to the caller; Windows quotas may reduce it.
 	uint64_t free = 0; // Total free space, including space unavailable to the caller.
 	uint64_t available = 0; // Free space available to the caller after quotas and reservations.
-	std::optional<filesystem_identity> identity; // Absent when a Windows filesystem does not expose FILE_ID_128.
+	std::optional<filesystem_identity> identity; // Absent when a Windows filesystem exposes no volume serial number.
 
 	[[nodiscard]] bool operator==(const filesystem_space&) const noexcept = default;
 };

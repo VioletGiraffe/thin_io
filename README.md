@@ -117,8 +117,11 @@ Allocated size follows the native accounting definition:
   `FILE_COMPRESSION_INFO::CompressedFileSize` so unallocated ranges and compression are reflected.
 - POSIX uses `st_blocks * 512`, as specified for `stat` rather than assuming the filesystem block size.
 
-`entry_identity` combines a filesystem identity with a 16-byte entry identity. Windows stores the full `FILE_ID_128`
-and volume serial number where the filesystem exposes them. POSIX stores the device ID and a zero-padded inode value.
+`entry_identity` combines a filesystem identity with a 16-byte entry identity. Windows stores the volume serial number
+and the full `FILE_ID_128`, or the zero-padded 64-bit file index on a filesystem without `FILE_ID_128`, such as FAT and
+exFAT. That index is derived from the directory entry's location: it identifies an entry at one moment, not across a
+rename or move. An entry with a zero index, such as the exFAT root, has no identity. POSIX stores the device ID and a
+zero-padded inode value.
 `thin_io` reports hard links and their identity but deliberately does not decide how a caller should count them.
 
 `get_entry_status()` reports the same `entry_status` a listing does, for one path and with an explicit
@@ -148,8 +151,8 @@ and identity of the containing filesystem:
 - `available` is the space available to the caller after quotas and filesystem reservations.
 
 `available` cannot exceed `free` or caller-visible `capacity`. On Windows, volume-wide `free` can exceed
-quota-reduced `capacity`; callers must not assume `free <= capacity` there. Filesystem identity is optional when a
-Windows filesystem does not expose `FILE_ID_128` information.
+quota-reduced `capacity`; callers must not assume `free <= capacity` there. Filesystem identity is absent when a
+Windows filesystem exposes no volume serial number.
 
 ## Building the library
 
