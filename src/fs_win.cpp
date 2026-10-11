@@ -204,6 +204,18 @@ private:
 	};
 }
 
+// Queries the tag only for a reparse point: filesystems without reparse points, such as exFAT, fail the query.
+[[nodiscard]] filesystem_result<DWORD> reparseTagForHandle(const HANDLE handle, const DWORD nativeAttributes) noexcept
+{
+	if ((nativeAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
+		return 0;
+
+	FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+	if (::GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tagInfo, sizeof(tagInfo)) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	return tagInfo.ReparseTag;
+}
+
 // Follows the link at path.
 [[nodiscard]] filesystem_result<entry_status> followedStatus(const wchar_t* const path) noexcept
 {
@@ -217,13 +229,12 @@ private:
 	if (::GetFileInformationByHandle(nativeHandle, &info) == 0) [[unlikely]]
 		return std::unexpected{capture_last_filesystem_error()};
 
-	// A target can itself be a reparse point, such as a cloud placeholder: its tag needs a separate query.
-	FILE_ATTRIBUTE_TAG_INFO tagInfo{};
-	if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
-		&& ::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &tagInfo, sizeof(tagInfo)) == 0) [[unlikely]]
-		return std::unexpected{capture_last_filesystem_error()};
+	// A target can itself be a reparse point, such as a cloud placeholder.
+	const auto reparseTag = reparseTagForHandle(nativeHandle, info.dwFileAttributes);
+	if (!reparseTag) [[unlikely]]
+		return std::unexpected{reparseTag.error()};
 
-	return statusFromWindows(info.dwFileAttributes, tagInfo.ReparseTag, info.nFileSizeHigh, info.nFileSizeLow,
+	return statusFromWindows(info.dwFileAttributes, *reparseTag, info.nFileSizeHigh, info.nFileSizeLow,
 		info.ftCreationTime, info.ftLastAccessTime, info.ftLastWriteTime);
 }
 
@@ -409,13 +420,16 @@ template <class Character>
 	if (standardInfo.EndOfFile.QuadPart < 0 || standardInfo.AllocationSize.QuadPart < 0) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_DATA }};
 
-	FILE_ATTRIBUTE_TAG_INFO attributeInfo{};
-	if (::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &attributeInfo, sizeof(attributeInfo)) == 0) [[unlikely]]
+	FILE_BASIC_INFO basicInfo{};
+	if (::GetFileInformationByHandleEx(nativeHandle, FileBasicInfo, &basicInfo, sizeof(basicInfo)) == 0) [[unlikely]]
 		return std::unexpected{capture_last_filesystem_error()};
+	const auto reparseTag = reparseTagForHandle(nativeHandle, basicInfo.FileAttributes);
+	if (!reparseTag) [[unlikely]]
+		return std::unexpected{reparseTag.error()};
 
 	entry_metadata metadata;
-	metadata.attributes = attributesFromWindows(attributeInfo.FileAttributes, attributeInfo.ReparseTag);
-	metadata.permissions = permissionsFromAttributes(attributeInfo.FileAttributes);
+	metadata.attributes = attributesFromWindows(basicInfo.FileAttributes, *reparseTag);
+	metadata.permissions = permissionsFromAttributes(basicInfo.FileAttributes);
 	metadata.logical_size = static_cast<uint64_t>(standardInfo.EndOfFile.QuadPart);
 	metadata.allocated_size = static_cast<uint64_t>(standardInfo.AllocationSize.QuadPart);
 	metadata.hard_link_count = standardInfo.NumberOfLinks;
@@ -567,7 +581,7 @@ template <class Character>
 	if (::GetFileAttributesExW(path, GetFileExInfoStandard, &data) == 0) [[unlikely]]
 		return std::unexpected{capture_last_filesystem_error()};
 
-	FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+	DWORD reparseTag = 0;
 	if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
 	{
 		const HANDLE nativeHandle = ::CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -576,11 +590,13 @@ template <class Character>
 			return std::unexpected{capture_last_filesystem_error()};
 		file_handle handle{nativeHandle};
 
-		if (::GetFileInformationByHandleEx(nativeHandle, FileAttributeTagInfo, &tagInfo, sizeof(tagInfo)) == 0) [[unlikely]]
-			return std::unexpected{capture_last_filesystem_error()};
+		const auto queriedTag = reparseTagForHandle(nativeHandle, data.dwFileAttributes);
+		if (!queriedTag) [[unlikely]]
+			return std::unexpected{queriedTag.error()};
+		reparseTag = *queriedTag;
 	}
 
-	return statusFromWindows(data.dwFileAttributes, tagInfo.ReparseTag, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime);
+	return statusFromWindows(data.dwFileAttributes, reparseTag, data.nFileSizeHigh, data.nFileSizeLow, data.ftCreationTime, data.ftLastAccessTime, data.ftLastWriteTime);
 }
 
 [[nodiscard]] filesystem_result<directory_entry> entryFromAttributes(const wchar_t* const path, native_string name)
