@@ -1,4 +1,5 @@
 #include "catch_thin_io.hpp"
+#include "test_volume.hpp"
 
 #include "file.hpp" // file::error_code
 #include "fs.hpp"
@@ -129,6 +130,9 @@ TEST_CASE("get_times reports a newly created file and directory", "[fs]")
 
 TEST_CASE("get_times follows a directory link to its target", "[fs][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "get-times-link-target.dir";
 	static constexpr char linkPath[] = "get-times-link.dir";
 #ifdef _WIN32
@@ -215,11 +219,7 @@ TEST_CASE("set_times round-trips every supported timestamp of a file", "[fs]")
 
 	REQUIRE(set_times(testFilePath, allTestTimes()));
 
-	const entry_times actual = readTimes(testFilePath);
-	CHECK(actual.last_access == testLastAccess);
-	CHECK(actual.last_write == testLastWrite);
-	if constexpr (creation_time_settable)
-		CHECK(actual.creation == testCreation);
+	test_volume::checkStoredTimes(readTimes(testFilePath), allTestTimes());
 
 	REQUIRE(file::delete_file(testFilePath));
 }
@@ -233,11 +233,7 @@ TEST_CASE("set_times sets the timestamps of a directory", "[fs]")
 
 	REQUIRE(set_times(testDirectoryPath, allTestTimes()));
 
-	const entry_times actual = readTimes(testDirectoryPath);
-	CHECK(actual.last_access == testLastAccess);
-	CHECK(actual.last_write == testLastWrite);
-	if constexpr (creation_time_settable)
-		CHECK(actual.creation == testCreation);
+	test_volume::checkStoredTimes(readTimes(testDirectoryPath), allTestTimes());
 
 	REQUIRE(removeDirectory(testDirectoryPath));
 }
@@ -257,10 +253,7 @@ TEST_CASE("native-wide timestamp APIs round-trip a Unicode file and directory", 
 	{
 		REQUIRE(set_times(path, allTestTimes()));
 
-		const entry_times actual = readTimes(path);
-		CHECK(actual.creation == testCreation);
-		CHECK(actual.last_access == testLastAccess);
-		CHECK(actual.last_write == testLastWrite);
+		test_volume::checkStoredTimes(readTimes(path), allTestTimes());
 	}
 
 	REQUIRE(file::delete_file(testFilePath));
@@ -280,11 +273,9 @@ TEST_CASE("set_times leaves omitted timestamps untouched", "[fs]")
 	onlyLastWrite.last_write = newLastWrite;
 	REQUIRE(set_times(testFilePath, onlyLastWrite));
 
-	const entry_times actual = readTimes(testFilePath);
-	CHECK(actual.last_write == newLastWrite);
-	CHECK(actual.last_access == testLastAccess);
-	if constexpr (creation_time_settable)
-		CHECK(actual.creation == testCreation);
+	entry_times expected = allTestTimes();
+	expected.last_write = newLastWrite;
+	test_volume::checkStoredTimes(readTimes(testFilePath), expected);
 
 	REQUIRE(file::delete_file(testFilePath));
 }
@@ -298,17 +289,19 @@ TEST_CASE("set_times with nothing requested succeeds and changes nothing", "[fs]
 
 	REQUIRE(set_times(testFilePath, entry_times{}));
 
-	const entry_times actual = readTimes(testFilePath);
-	CHECK(actual.last_access == testLastAccess);
-	CHECK(actual.last_write == testLastWrite);
-	if constexpr (creation_time_settable)
-		CHECK(actual.creation == testCreation);
+	test_volume::checkStoredTimes(readTimes(testFilePath), allTestTimes());
 
 	REQUIRE(file::delete_file(testFilePath));
 }
 
 TEST_CASE("set_times accepts pre-1970 timestamps", "[fs]")
 {
+	if (!test_volume::storesTimesBefore1980())
+	{
+		WARN("This filesystem has no timestamps before 1980: test skipped");
+		return;
+	}
+
 	static constexpr char testFilePath[] = "set-times-negative.file";
 	file::delete_file(testFilePath);
 	REQUIRE(createEmptyFile(testFilePath));
@@ -363,10 +356,7 @@ TEST_CASE("set_times rejects times outside the representable FILETIME range", "[
 	CHECK(file::error_code() == ERROR_INVALID_PARAMETER);
 
 	// The range check precedes the SetFileTime call, so nothing can have been written
-	const entry_times actual = readTimes(testFilePath);
-	CHECK(actual.last_write == testLastWrite);
-	CHECK(actual.last_access == testLastAccess);
-	CHECK(actual.creation == testCreation);
+	test_volume::checkStoredTimes(readTimes(testFilePath), allTestTimes());
 
 	REQUIRE(file::delete_file(testFilePath));
 }
@@ -388,9 +378,7 @@ TEST_CASE("set_times ignores a creation time the platform cannot write", "[fs]")
 	requested.last_write = testLastWrite;
 	REQUIRE(set_times(testFilePath, requested));
 
-	const entry_times actual = readTimes(testFilePath);
-	CHECK(actual.last_access == testLastAccess);
-	CHECK(actual.last_write == testLastWrite);
+	test_volume::checkStoredTimes(readTimes(testFilePath), allTestTimes());
 
 	REQUIRE(file::delete_file(testFilePath));
 }
@@ -437,6 +425,9 @@ TEST_CASE("remove_entry removes a file and an empty directory, and refuses a non
 #ifndef _WIN32
 TEST_CASE("POSIX remove_entry removes a symbolic link and leaves its target", "[fs][remove][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "remove-entry-target.dir";
 	static constexpr char linkPath[] = "remove-entry-link";
 	::unlink(linkPath);
@@ -528,7 +519,10 @@ TEST_CASE("rename_entry fails on or replaces an existing destination as requeste
 	const auto ontoDirectory = rename_entry(destinationPath, directoryPath, existing_destination::replace);
 	REQUIRE_FALSE(ontoDirectory);
 #ifdef _WIN32
-	CHECK(ontoDirectory.error().native_code == ERROR_ACCESS_DENIED);
+	if (test_volume::isFatFamily())
+		CHECK(ontoDirectory.error().native_code == ERROR_ALREADY_EXISTS);
+	else
+		CHECK(ontoDirectory.error().native_code == ERROR_ACCESS_DENIED);
 #else
 	CHECK(ontoDirectory.error().native_code == EISDIR);
 #endif
@@ -544,6 +538,9 @@ TEST_CASE("rename_entry fails on or replaces an existing destination as requeste
 #ifndef _WIN32
 TEST_CASE("POSIX rename_entry renames a symbolic link and leaves its target", "[fs][rename][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "rename-entry-target.dir";
 	static constexpr char linkPath[] = "rename-entry-link";
 	static constexpr char renamedLinkPath[] = "rename-entry-link-renamed";

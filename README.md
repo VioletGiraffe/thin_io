@@ -158,6 +158,8 @@ Windows filesystem exposes no volume serial number.
 
 - The supplied builds use `qmake` or CMake; another build system only needs the common headers and the implementation
   files for its target platform.
-- `scripts/run_tests.bat` and `scripts/run_tests.sh` build the tests with CMake and run them, as CI does.
+- `scripts/run_tests.bat` and `scripts/run_tests.sh` build the tests with CMake and run them, as CI does. Each
+  argument is a directory to run them in as well: the tests create their entries in the current directory and skip
+  what its filesystem cannot store, such as links and exact timestamps on FAT32 and exFAT.
 - Depends on the header-only [cpp-template-utils](https://github.com/VioletGiraffe/cpp-template-utils), checked out
   beside thin_io as `../cpp-template-utils`. Its Catch2 copy is used by the tests.

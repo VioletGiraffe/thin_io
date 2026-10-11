@@ -1,4 +1,5 @@
 #include "catch_thin_io.hpp"
+#include "test_volume.hpp"
 
 #include "file.hpp"
 #include "fs.hpp"
@@ -175,6 +176,9 @@ TEST_CASE("get_entry_metadata reports regular files, empty files, and directorie
 
 TEST_CASE("get_entry_metadata identifies hard links", "[fs][metadata][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "entry-metadata-hard-link-target.file";
 	static constexpr char linkPath[] = "entry-metadata-hard-link.file";
 	file::delete_file(linkPath);
@@ -409,6 +413,9 @@ TEST_CASE("get_entry_status and set_permissions reject invalid input", "[fs][sta
 #ifndef _WIN32
 TEST_CASE("POSIX set_permissions reaches a symbolic link's target only when following", "[fs][metadata][permissions][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "entry-permissions-symlink-target.file";
 	static constexpr char linkPath[] = "entry-permissions-symlink.file";
 	::unlink(linkPath);
@@ -438,6 +445,9 @@ TEST_CASE("POSIX set_permissions reaches a symbolic link's target only when foll
 
 TEST_CASE("POSIX metadata explicitly follows or inspects symbolic links", "[fs][metadata][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "entry-metadata-symlink-target.file";
 	static constexpr char linkPath[] = "entry-metadata-symlink.file";
 	static constexpr char targetName[] = "entry-metadata-symlink-target.file";
@@ -480,6 +490,9 @@ TEST_CASE("POSIX metadata explicitly follows or inspects symbolic links", "[fs][
 
 TEST_CASE("POSIX metadata for a dangling symbolic link", "[fs][metadata][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char linkPath[] = "entry-metadata-dangling.link";
 	::unlink(linkPath);
 	REQUIRE(::symlink("no-such-target-entry", linkPath) == 0);

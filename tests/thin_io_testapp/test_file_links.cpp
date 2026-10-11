@@ -1,4 +1,5 @@
 #include "catch_thin_io.hpp"
+#include "test_volume.hpp"
 
 #include "file.hpp"
 
@@ -11,6 +12,9 @@ using namespace thin_io;
 
 TEST_CASE("exclusive creation does not follow a link", "[file][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char targetPath[] = "exclusive-create-target.file";
 	static constexpr char linkPath[] = "exclusive-create-link.file";
 	static constexpr char targetContents[] = "target contents";

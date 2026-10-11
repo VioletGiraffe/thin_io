@@ -107,4 +107,5 @@ win*:SOURCES += \
 	test_file_win.cpp \
 	test_windows_path.cpp
 
-HEADERS += catch_thin_io.hpp
+HEADERS += catch_thin_io.hpp \
+	test_volume.hpp

@@ -1,4 +1,5 @@
 #include "catch_thin_io.hpp"
+#include "test_volume.hpp"
 
 #include "file.hpp"
 
@@ -912,10 +913,7 @@ TEST_CASE("handle-based times round-trip", "[file]")
 
 	auto actual = f.times();
 	REQUIRE(actual);
-	CHECK(actual->last_access == requested.last_access);
-	CHECK(actual->last_write == requested.last_write);
-	if constexpr (creation_time_settable)
-		CHECK(actual->creation == requested.creation);
+	test_volume::checkStoredTimes(*actual, requested);
 
 	// An unset member leaves the current value untouched
 	entry_times writeOnly;
@@ -923,8 +921,8 @@ TEST_CASE("handle-based times round-trip", "[file]")
 	REQUIRE(f.set_times(writeOnly));
 	actual = f.times();
 	REQUIRE(actual);
-	CHECK(actual->last_write == writeOnly.last_write);
-	CHECK(actual->last_access == requested.last_access);
+	requested.last_write = writeOnly.last_write;
+	test_volume::checkStoredTimes(*actual, requested);
 
 	REQUIRE(f.close());
 	REQUIRE(file::delete_file(testFilePath));

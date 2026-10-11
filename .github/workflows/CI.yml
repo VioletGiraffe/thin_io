@@ -20,11 +20,65 @@ jobs:
     - name: Checkout dependencies
       run: git clone --depth 1 https://github.com/VioletGiraffe/cpp-template-utils ../cpp-template-utils
 
+    # The tests also run on an exFAT and a FAT32 volume: neither has links, exact timestamps, or the newer
+    # Windows file-information classes, which is where NTFS-only assumptions show.
+    - name: RAM disk - Windows
+      if: runner.os == 'Windows'
+      uses: chad-golden/setup-ramdisk@v1.0.1
+      with:
+        size-in-mb: 128
+        drive-letter: 'R'
+        copy-workspace: false
+
+    - name: exFAT and FAT32 volumes - Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Fail the step if a native command does (pwsh otherwise propagates only the last command's exit code)
+        $PSNativeCommandUseErrorActionPreference = $true
+        $ErrorActionPreference = 'Stop'
+        # The action above leaves ImDisk in System32, so the second RAM disk is one command.
+        imdisk -a -s 128M -m S: -p "/FS:FAT32 /Q /Y"
+        # R: comes formatted by the action. Wipes the disk, which is only safe while copy-workspace is false.
+        # format.com, not Format-Volume: ImDisk volumes are absent from the Storage provider the cmdlets query.
+        format.com R: /FS:exFAT /Q /Y /V:EXFAT
+        # imdisk delegates -p to format.com and does not report its failure, so assert the end state.
+        foreach ($volume in @{ Letter = 'R'; Filesystem = 'exFAT' }, @{ Letter = 'S'; Filesystem = 'FAT32' }) {
+          $actual = [System.IO.DriveInfo]::new("$($volume.Letter):").DriveFormat
+          if ($actual -ne $volume.Filesystem) { throw "$($volume.Letter): is $actual, expected $($volume.Filesystem)" }
+        }
+        echo "TEST_DIRECTORIES=R:\ S:\" >> $env:GITHUB_ENV
+
+    - name: exFAT and FAT32 volumes - macOS
+      if: runner.os == 'macOS'
+      run: |
+        set -e
+        exfat=$(hdiutil attach -nomount ram://262144 | awk '{print $1}')  # 512-byte sectors: 128 MB
+        diskutil erasevolume ExFAT TIOEXFAT "$exfat"
+        fat32=$(hdiutil attach -nomount ram://262144 | awk '{print $1}')
+        diskutil erasevolume "MS-DOS FAT32" TIOFAT32 "$fat32"
+        echo "TEST_DIRECTORIES=/Volumes/TIOEXFAT /Volumes/TIOFAT32" >> $GITHUB_ENV
+
+    - name: exFAT and FAT32 volumes - Linux
+      if: runner.os == 'Linux'
+      run: |
+        set -e
+        sudo apt-get install -y --no-install-recommends exfatprogs dosfstools
+        truncate -s 128M "$RUNNER_TEMP/exfat.img" "$RUNNER_TEMP/fat32.img"
+        mkfs.exfat "$RUNNER_TEMP/exfat.img"
+        mkfs.vfat -F 32 "$RUNNER_TEMP/fat32.img"
+        sudo mkdir -p /mnt/tio-exfat /mnt/tio-fat32
+        # The type is explicit so that a kernel without the driver fails here, not through a FUSE fallback.
+        # uid and gid: these filesystems store no owner, and the tests run unprivileged.
+        sudo mount -t exfat -o "loop,uid=$(id -u),gid=$(id -g)" "$RUNNER_TEMP/exfat.img" /mnt/tio-exfat
+        sudo mount -t vfat -o "loop,uid=$(id -u),gid=$(id -g)" "$RUNNER_TEMP/fat32.img" /mnt/tio-fat32
+        echo "TEST_DIRECTORIES=/mnt/tio-exfat /mnt/tio-fat32" >> $GITHUB_ENV
+
     - name: Build & test
       if: runner.os == 'Windows'
       shell: cmd
-      run: scripts\run_tests.bat
+      run: scripts\run_tests.bat %TEST_DIRECTORIES%
 
     - name: Build & test
       if: runner.os != 'Windows'
-      run: scripts/run_tests.sh
+      run: scripts/run_tests.sh $TEST_DIRECTORIES

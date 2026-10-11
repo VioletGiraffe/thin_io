@@ -1,4 +1,5 @@
 #include "catch_thin_io.hpp"
+#include "test_volume.hpp"
 
 #include "file.hpp"
 #include "fs.hpp"
@@ -309,6 +310,9 @@ TEST_CASE("get_directory_entry reports one entry as a full listing does", "[fs][
 #ifndef _WIN32
 TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs][directory][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr char directoryPath[] = "list-directory-posix-types";
 	static constexpr char targetPath[] = "list-directory-posix-types/target";
 	static constexpr char subdirectoryPath[] = "list-directory-posix-types/subdir";
@@ -730,6 +734,9 @@ TEST_CASE("Windows directory enumeration reports reparse points and their tag", 
 
 TEST_CASE("Windows directory enumeration reports a junction as a linked directory with the mount-point tag", "[fs][directory][windows][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr wchar_t directoryPath[] = L"list-directory-junction";
 	static constexpr wchar_t targetPath[] = L"list-directory-junction\\target.dir";
 	static constexpr wchar_t linkPath[] = L"list-directory-junction\\link.dir";
@@ -767,6 +774,9 @@ TEST_CASE("Windows directory enumeration reports a junction as a linked director
 
 TEST_CASE("Windows remove_entry removes a junction or a symbolic link and leaves its target", "[fs][remove][windows][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr wchar_t directoryPath[] = L"remove-entry-links";
 	static constexpr wchar_t targetPath[] = L"remove-entry-links\\target.dir";
 	static constexpr wchar_t targetFilePath[] = L"remove-entry-links\\target.dir\\kept.file";
@@ -855,6 +865,9 @@ TEST_CASE("Windows remove_entry removes a symbolic link whose flavor does not ma
 
 TEST_CASE("Windows rename_entry renames a junction and leaves its target", "[fs][rename][windows][link]")
 {
+	if (test_volume::linksUnsupported())
+		return;
+
 	static constexpr wchar_t directoryPath[] = L"rename-entry-junction";
 	static constexpr wchar_t targetPath[] = L"rename-entry-junction\\target.dir";
 	static constexpr wchar_t targetFilePath[] = L"rename-entry-junction\\target.dir\\kept.file";
