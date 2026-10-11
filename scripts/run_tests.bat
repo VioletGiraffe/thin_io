@@ -2,16 +2,28 @@
 :: Builds the tests with CMake and runs them, the same commands as CI. Exit code: 1 on a build or test failure, 2 when
 :: CMake is not found.
 :: Visual Studio's bundled CMake is used when none is on PATH.
-:: Arguments: directories to run the tests in as well, such as one on a FAT32 or an exFAT volume. The tests create
-:: their entries in the current directory.
+:: Arguments:
+::   build | nobuild - optional, first: build without running, or run what is already built;
+::   directories to run the tests in as well, such as one on a FAT32 or an exFAT volume. The tests create their
+::   entries in the current directory.
 setlocal
 set "root=%~dp0.."
 set "configuration=Release"
 
+set "mode=all"
+if /i "%~1"=="build" set "mode=build"
+if /i "%~1"=="nobuild" set "mode=nobuild"
+if not "%mode%"=="all" shift
+
+:: ctest comes with CMake, so a run without a build needs it too
 where cmake >nul 2>nul || call :add_visual_studio_cmake_to_path || exit /b 2
 
+if "%mode%"=="nobuild" goto run
 cmake -S "%root%\tests" -B "%root%\build" "-DOUTPUT_DIR=%root%\build\bin" || exit /b 1
 cmake --build "%root%\build" --config %configuration% --parallel || exit /b 1
+if "%mode%"=="build" exit /b 0
+
+:run
 ctest --test-dir "%root%\build" -C %configuration% --output-on-failure --no-tests=error || exit /b 1
 
 set "failed="

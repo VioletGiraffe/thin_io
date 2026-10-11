@@ -20,6 +20,15 @@ jobs:
     - name: Checkout dependencies
       run: git clone --depth 1 https://github.com/VioletGiraffe/cpp-template-utils ../cpp-template-utils
 
+    - name: Build
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: scripts\run_tests.bat build
+
+    - name: Build
+      if: runner.os != 'Windows'
+      run: scripts/run_tests.sh build
+
     # The tests also run on an exFAT and a FAT32 volume: neither has links, exact timestamps, or the newer
     # Windows file-information classes, which is where NTFS-only assumptions show.
     - name: RAM disk - Windows
@@ -77,11 +86,11 @@ jobs:
         sudo mount -t vfat -o "loop,uid=$(id -u),gid=$(id -g)" "$RUNNER_TEMP/fat32.img" /mnt/tio-fat32
         echo "TEST_DIRECTORIES=/mnt/tio-exfat /mnt/tio-fat32" >> $GITHUB_ENV
 
-    - name: Build & test
+    - name: Test
       if: runner.os == 'Windows'
       shell: cmd
-      run: scripts\run_tests.bat %TEST_DIRECTORIES%
+      run: scripts\run_tests.bat nobuild %TEST_DIRECTORIES%
 
-    - name: Build & test
+    - name: Test
       if: runner.os != 'Windows'
-      run: scripts/run_tests.sh $TEST_DIRECTORIES
+      run: scripts/run_tests.sh nobuild $TEST_DIRECTORIES
