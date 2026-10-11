@@ -17,6 +17,7 @@ static_assert((file::sharing_mode::ShareRead | file::sharing_mode::ShareWrite | 
 #define REQUIRE_WIN(...) (void)0
 #define REQUIRE_LINUX(...) REQUIRE(__VA_ARGS__)
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -436,10 +437,15 @@ TEST_CASE("resize and preallocate", "[file]")
 	REQUIRE(f.resize(largeSize));
 	REQUIRE(f.size() == largeSize);
 	REQUIRE(f.pos() == positionBeforeGrowth);
-	REQUIRE(f.preallocate(largeSize));
+	if (test_volume::supportsPreallocation())
+	{
+		REQUIRE(f.preallocate(largeSize));
+		REQUIRE_LINUX(allocatedSizeOnDisk(testFilePath) >= largeSize); // Linux + macOS: real allocation, not a sparse file
+	}
+	else
+		REQUIRE(!f.preallocate(largeSize)); // Reported, not emulated by writing the range
 	REQUIRE(f.size() == largeSize);
 	REQUIRE(f.pos() == positionBeforeGrowth);
-	REQUIRE_LINUX(allocatedSizeOnDisk(testFilePath) >= largeSize); // Linux + macOS: real allocation, not a sparse file
 
 	REQUIRE(f.set_pos(0));
 	char contentAfterPreallocation[sizeof(preservedContent)]{};
@@ -450,6 +456,30 @@ TEST_CASE("resize and preallocate", "[file]")
 	REQUIRE(f.resize(1024));
 	REQUIRE(f.size() == 1024);
 	REQUIRE(f.pos() == positionBeforeShrink);
+
+	REQUIRE(f.close());
+	REQUIRE(file::delete_file(testFilePath));
+}
+
+// A copy's destination is opened for writing only.
+TEST_CASE("preallocate does not need read access", "[file]")
+{
+	static constexpr const char testFilePath[] = "test-preallocate-write-only.file";
+	static constexpr uint64_t size = 64u * 1024u;
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Write));
+	REQUIRE(f.resize(size));
+	if (test_volume::supportsPreallocation())
+		REQUIRE(f.preallocate(size));
+	else
+	{
+		REQUIRE(!f.preallocate(size));
+#ifdef __linux__
+		CHECK(file::error_code() == EOPNOTSUPP);
+#endif
+	}
 
 	REQUIRE(f.close());
 	REQUIRE(file::delete_file(testFilePath));

@@ -106,6 +106,16 @@ enum class filesystem_kind {
 	return true;
 }
 
+// The Linux exFAT driver has no fallocate.
+[[nodiscard]] inline bool supportsPreallocation() noexcept
+{
+#ifdef __linux__
+	return kind() != filesystem_kind::exfat;
+#else
+	return true;
+#endif
+}
+
 // exFAT names are UTF-16: Linux refuses to create a name that is not valid UTF-8 there.
 [[nodiscard]] inline bool nonUtf8NamesUnsupported()
 {

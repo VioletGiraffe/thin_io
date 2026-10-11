@@ -287,6 +287,10 @@ bool file_impl::preallocate(const uint64_t requestedSize) noexcept
 	}
 
 	return true;
+#elif defined(__linux__)
+	// Not posix_fallocate: where the filesystem has no preallocation, such as exFAT, glibc emulates it by reading
+	// and rewriting the range. That reserves nothing a write would not, and fails on a write-only descriptor.
+	return ::fallocate64(_fd, 0, 0, static_cast<off64_t>(requestedSize)) == 0;
 #else
 	// The requested range is already within the logical file size, so posix_fallocate does not extend the file.
 	// It reports errors through its return value rather than errno.
