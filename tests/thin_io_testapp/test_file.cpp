@@ -141,7 +141,8 @@ TEST_CASE("open dispositions", "[file]")
 #ifndef _WIN32
 	struct stat createdFileInfo;
 	REQUIRE(::stat(testFilePath, &createdFileInfo) == 0);
-	REQUIRE((createdFileInfo.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0);
+	if (test_volume::storesPermissionBits())
+		REQUIRE((createdFileInfo.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0);
 #endif
 	REQUIRE(file::delete_file(testFilePath));
 }
@@ -930,6 +931,9 @@ TEST_CASE("handle-based times round-trip", "[file]")
 
 TEST_CASE("handle-based permissions round-trip", "[file]")
 {
+	if (test_volume::permissionBitsUnsupported())
+		return;
+
 	static constexpr const char testFilePath[] = "test.file";
 	file::delete_file(testFilePath);
 	REQUIRE(createTestFile(testFilePath, "x", 1));

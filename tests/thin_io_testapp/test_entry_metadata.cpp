@@ -203,6 +203,9 @@ TEST_CASE("get_entry_metadata identifies hard links", "[fs][metadata][link]")
 
 TEST_CASE("get_entry_metadata distinguishes sparse allocation from logical size", "[fs][metadata][sparse]")
 {
+	if (test_volume::sparseFilesUnsupported())
+		return;
+
 	static constexpr char sparsePath[] = "entry-metadata-sparse.file";
 	static constexpr char densePath[] = "entry-metadata-dense.file";
 	file::delete_file(sparsePath);
@@ -309,6 +312,9 @@ TEST_CASE("get_entry_metadata rejects invalid input", "[fs][metadata]")
 
 TEST_CASE("set_permissions by path round-trips through get_entry_metadata", "[fs][metadata][permissions]")
 {
+	if (test_volume::permissionBitsUnsupported())
+		return;
+
 	static constexpr char directoryPath[] = "entry-permissions";
 	static constexpr char filePath[] = "entry-permissions/file.bin";
 #ifdef _WIN32

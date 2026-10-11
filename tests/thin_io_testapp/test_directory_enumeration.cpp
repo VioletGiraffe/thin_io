@@ -254,7 +254,8 @@ TEST_CASE("list_directory with full detail reports sizes, times and permissions"
 #ifdef _WIN32
 	CHECK_FALSE(regular->permissions->read_only);
 #else
-	CHECK(regular->permissions->mode == 0640);
+	if (test_volume::storesPermissionBits())
+		CHECK(regular->permissions->mode == 0640);
 #endif
 	CHECK_FALSE(regular->link_target);
 
