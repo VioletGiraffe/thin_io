@@ -12,6 +12,8 @@ namespace thin_io {
 
 // Read-only file access for many small reads at scattered positions, such as parsing a container's metadata.
 // - Bytes are read through a window that keeps what was already read: seeks within it, either way, cost no I/O.
+// - The end of file is kept once a read finds it: reads and peeks at or past it cost no I/O.
+// - What was read is a snapshot: later changes to the file, growth included, may go unseen until open.
 // - Only positional reads are issued: a seek never reaches the OS.
 // - Reads of at least window_size bytes go straight to the destination.
 class [[nodiscard]] buffered_reader {
@@ -48,6 +50,7 @@ public:
 private:
 	// The window's bytes from the position on; empty when the position is outside it
 	[[nodiscard]] std::span<const std::byte> buffered_at_pos() const noexcept;
+	// On success, the position is in the window or at or past _endOfFile
 	bool fill_window_at_pos() noexcept;
 
 private:
@@ -56,6 +59,8 @@ private:
 	uint64_t _windowStart = 0;
 	uint64_t _windowLength = 0;
 	uint64_t _pos = 0;
+	// Reads at or past it return nothing; UINT64_MAX until a read finds the end of file
+	uint64_t _endOfFile = UINT64_MAX;
 };
 
 } // namespace thin_io

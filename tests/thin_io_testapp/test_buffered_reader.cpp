@@ -158,13 +158,62 @@ TEST_CASE("buffered_reader: end of file", "[buffered_reader]")
 	REQUIRE(reader.read(bytes.data(), bytes.size()) == 0u);
 	REQUIRE(reader.pos() == testFileSize + 1000);
 
+	// Reopened for each read: a known end of file answers without reaching the file
 	for (const uint64_t pos : { uint64_t{ 1 } << 63, ~uint64_t{ 1 } })
 	{
-		requireReadAt(reader, 0, 8); // Leaves the Win32 file pointer at data
-		reader.set_pos(pos);
+		for (const size_t size : { size_t{ 50 }, bytes.size() })
+		{
+			REQUIRE(reader.open(testFilePath));
+			requireReadAt(reader, 0, 8); // Leaves the Win32 file pointer at data
+			reader.set_pos(pos);
+			REQUIRE(reader.read(bytes.data(), size) == 0u);
+			REQUIRE(reader.pos() == pos);
+		}
+	}
+}
+
+// Changes the file behind the reader: a reader that returns the old state issued no I/O for it
+static void pwriteToTestFile(const std::span<const std::byte> bytes, const uint64_t pos)
+{
+	file writer;
+	REQUIRE(writer.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::OpenExisting));
+	REQUIRE(writer.pwrite(bytes.data(), bytes.size(), pos) == bytes.size());
+	REQUIRE(writer.close());
+}
+
+TEST_CASE("buffered_reader: no I/O at a known end of file", "[buffered_reader]")
+{
+	const TestFile testFile;
+	buffered_reader reader;
+	REQUIRE(reader.open(testFilePath));
+	std::vector<std::byte> bytes(buffered_reader::window_size + 50);
+
+	SECTION("reads and peeks at or across it")
+	{
+		reader.set_pos(testFileSize - 10);
+		REQUIRE(reader.read(bytes.data(), 50) == 10u);
+		pwriteToTestFile(std::span{ bytes }.first(16), testFileSize);
+
 		REQUIRE(reader.read(bytes.data(), 50) == 0u);
 		REQUIRE(reader.read(bytes.data(), bytes.size()) == 0u);
-		REQUIRE(reader.pos() == pos);
+		reader.set_pos(testFileSize - 10);
+		const auto tail = reader.peek(50);
+		REQUIRE(tail.has_value());
+		REQUIRE(tail->size() == 10u);
+
+		REQUIRE(reader.open(testFilePath));
+		reader.set_pos(testFileSize - 10);
+		REQUIRE(reader.read(bytes.data(), 50) == 26u);
+	}
+
+	SECTION("a read past it keeps the window")
+	{
+		requireReadAt(reader, 0, 8);
+		// Far enough past the end for the window start, rounded down, to be past it too
+		reader.set_pos(testFileSize + buffered_reader::window_size);
+		REQUIRE(reader.read(bytes.data(), 50) == 0u);
+		pwriteToTestFile(std::vector<std::byte>(8, std::byte{ 0xAA }), 0);
+		requireReadAt(reader, 0, 8);
 	}
 }
 

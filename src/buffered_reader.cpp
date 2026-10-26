@@ -36,6 +36,7 @@ void buffered_reader::close() noexcept
 	(void)_file.close();
 	_pos = 0;
 	_windowLength = 0;
+	_endOfFile = UINT64_MAX;
 }
 
 std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) noexcept
@@ -53,6 +54,8 @@ std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) n
 			total += n;
 			_pos += n;
 		}
+		else if (_pos >= _endOfFile)
+			break;
 		else if (remaining >= window_size)
 		{
 			const auto n = _file.pread(out + total, remaining, _pos);
@@ -62,19 +65,17 @@ std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) n
 				return {};
 			}
 			if (*n == 0)
+			{
+				_endOfFile = _pos;
 				break;
+			}
 			total += *n;
 			_pos += *n;
 		}
-		else
+		else if (!fill_window_at_pos())
 		{
-			if (!fill_window_at_pos())
-			{
-				_pos = startPos;
-				return {};
-			}
-			if (buffered_at_pos().empty()) // end of file
-				break;
+			_pos = startPos;
+			return {};
 		}
 	}
 	return total;
@@ -82,7 +83,7 @@ std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) n
 
 std::optional<std::span<const std::byte>> buffered_reader::peek(const size_t size) noexcept
 {
-	const size_t wanted = std::min(size, window_size);
+	const auto wanted = static_cast<size_t>(std::min<uint64_t>({ size, window_size, _endOfFile - std::min(_pos, _endOfFile) }));
 	if (buffered_at_pos().size() < wanted && !fill_window_at_pos())
 		return {};
 
@@ -113,12 +114,19 @@ bool buffered_reader::fill_window_at_pos() noexcept
 			return false;
 		}
 		if (*n == 0)
+		{
+			_endOfFile = start + length;
 			break;
+		}
 		length += *n;
 	}
 
-	_windowStart = start;
-	_windowLength = length;
+	// Nothing past the end of file replaces the window
+	if (length != 0)
+	{
+		_windowStart = start;
+		_windowLength = length;
+	}
 	return true;
 }
 
