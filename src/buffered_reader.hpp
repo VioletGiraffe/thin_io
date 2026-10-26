@@ -36,7 +36,8 @@ public:
 
 	// Fewer bytes than requested only at end of file. Fails without moving the position.
 	std::optional<uint64_t> read(void* dest, uint64_t size) noexcept;
-	// Up to min(size, window_size) bytes at the position, which stays put; valid until the next read, peek or open
+	// min(size, window_size) bytes at the position, which stays put; fewer only at end of file.
+	// Valid until the next read, peek or open.
 	std::optional<std::span<const std::byte>> peek(size_t size) noexcept;
 
 	// Beware, it's OS-specific!

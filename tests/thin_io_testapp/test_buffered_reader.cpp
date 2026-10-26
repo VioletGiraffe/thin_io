@@ -162,10 +162,19 @@ TEST_CASE("buffered_reader: peek", "[buffered_reader]")
 	{
 		requireReadAt(reader, 0, 1);
 		reader.set_pos(buffered_reader::window_size - 2);
-		const auto peeked = reader.peek(8);
+		const auto peeked = reader.peek(buffered_reader::window_size);
 		REQUIRE(peeked.has_value());
-		REQUIRE(peeked->size() == 8u);
+		REQUIRE(peeked->size() == buffered_reader::window_size);
 		REQUIRE(matchesFileAt(*peeked, buffered_reader::window_size - 2));
+	}
+
+	SECTION("returns the whole request at an unaligned position")
+	{
+		reader.set_pos(100);
+		const auto peeked = reader.peek(buffered_reader::window_size);
+		REQUIRE(peeked.has_value());
+		REQUIRE(peeked->size() == buffered_reader::window_size);
+		REQUIRE(matchesFileAt(*peeked, 100));
 	}
 
 	SECTION("is limited to the window size and to the end of file")

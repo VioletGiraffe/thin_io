@@ -8,9 +8,11 @@ namespace thin_io {
 // Window starts are rounded down to this: page-aligned reads, and room for short backward seeks
 static constexpr uint64_t window_alignment = 4096;
 static_assert(buffered_reader::window_size % window_alignment == 0);
+// Holds window_size bytes from any position despite the rounded-down start
+static constexpr size_t window_capacity = buffered_reader::window_size + window_alignment;
 
 buffered_reader::buffered_reader()
-	: _window{ std::make_unique_for_overwrite<std::byte[]>(window_size) }
+	: _window{ std::make_unique_for_overwrite<std::byte[]>(window_capacity) }
 {
 }
 
@@ -96,9 +98,9 @@ bool buffered_reader::fill_window_at_pos() noexcept
 	const uint64_t start = _pos - _pos % window_alignment;
 	uint64_t length = 0;
 	// pread may transfer less than requested before the end of file
-	while (length < window_size)
+	while (length < window_capacity)
 	{
-		const auto n = _file.pread(_window.get() + length, window_size - length, start + length);
+		const auto n = _file.pread(_window.get() + length, window_capacity - length, start + length);
 		if (!n)
 		{
 			_windowLength = 0;
