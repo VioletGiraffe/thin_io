@@ -71,12 +71,14 @@ else()
 endif()
 
 add_library(${TARGET_NAME} STATIC
+	src/buffered_reader.hpp
 	src/enum_helpers.hpp
 	src/file.hpp
 	src/file_interface.hpp
 	src/filesystem_error.hpp
 	src/filesystem_types.hpp
 	src/fs.hpp
+	src/buffered_reader.cpp
 	src/filesystem_error.cpp
 	${PLATFORM_FILES}
 )

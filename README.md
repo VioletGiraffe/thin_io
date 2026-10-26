@@ -1,12 +1,15 @@
 # Thin IO
 
-A lightweight cross-platform low-level C++ file library built directly on native system APIs, without `<stdio>`,
-`<fstream>`, or Qt. It provides synchronous binary file I/O, mapping, resizing, preallocation, deletion, and file or
-directory timestamps. Higher-level concerns such as serialization, recursive traversal, and asynchronous execution
-stay outside the library.
+A lightweight cross-platform C++ file library built directly on native system APIs, without `<stdio>`, `<fstream>`,
+or Qt. It provides synchronous binary file I/O, buffered reading, mapping, resizing, preallocation, deletion, and file
+or directory timestamps. Serialization, recursive traversal, and asynchronous execution are left to the caller.
 
-The main file interface is in [`src/file_interface.hpp`](src/file_interface.hpp). Timestamp operations and synchronous
-single-directory discovery and accounting operations are declared in [`src/fs.hpp`](src/fs.hpp).
+| Header | Facility |
+|---|---|
+| [`src/file_interface.hpp`](src/file_interface.hpp) | The main file interface |
+| [`src/buffered_reader.hpp`](src/buffered_reader.hpp) | Read-only access for many small reads at scattered positions: a window keeps the bytes already read, so seeks within it cost no I/O |
+| [`src/fs.hpp`](src/fs.hpp) | Timestamp operations, and synchronous single-directory discovery and accounting |
+| [`src/qt_paths.hpp`](src/qt_paths.hpp) | Header-only conversion between `QString` and native paths, for callers that use Qt; the library itself does not |
 
 ## Native path contract
 

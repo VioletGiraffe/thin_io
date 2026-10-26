@@ -70,6 +70,7 @@ linux*|mac*|freebsd{
 INCLUDEPATH += ../cpp-template-utils
 
 HEADERS += \
+	src/buffered_reader.hpp \
 	src/enum_helpers.hpp \
 	src/file.hpp \
 	src/file_interface.hpp \
@@ -77,7 +78,9 @@ HEADERS += \
 	src/filesystem_types.hpp \
 	src/fs.hpp
 
-SOURCES += src/filesystem_error.cpp
+SOURCES += \
+	src/buffered_reader.cpp \
+	src/filesystem_error.cpp
 
 win*{
 	HEADERS += $$files(src/*_win.hpp, true)
