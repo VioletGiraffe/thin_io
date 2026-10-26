@@ -43,7 +43,7 @@ bool file_impl::open(const char* path, const access_mode accessMode, const open_
 		return false;
 	}
 
-	int flags = O_LARGEFILE;
+	int flags = O_LARGEFILE | O_CLOEXEC; // Not inherited by child processes, as on Windows
 	switch (accessMode) {
 	case access_mode::Read:
 		flags |= O_RDONLY | O_NONBLOCK;

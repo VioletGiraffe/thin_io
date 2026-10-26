@@ -643,12 +643,14 @@ TEST_CASE("pread and pwrite at offsets beyond INT64_MAX", "[file]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
-TEST_CASE("open on an already open file switches to the new file", "[file]")
+TEST_CASE("open on an already open file closes it, even when the new open fails", "[file]")
 {
 	static constexpr const char firstPath[] = "test-first.file";
 	static constexpr const char secondPath[] = "test-second.file";
+	static constexpr const char missingPath[] = "test-missing.file";
 	file::delete_file(firstPath);
 	file::delete_file(secondPath);
+	file::delete_file(missingPath);
 	REQUIRE(createTestFile(firstPath, "first", 5));
 	REQUIRE(createTestFile(secondPath, "second", 6));
 
@@ -659,10 +661,17 @@ TEST_CASE("open on an already open file switches to the new file", "[file]")
 	REQUIRE(f.read(buf, 6) == 6);
 	CHECK(::memcmp(buf, "second", 6) == 0);
 
-	// The reopen must have closed the first handle - on Windows the deletion would fail otherwise
-	REQUIRE(file::delete_file(firstPath));
+	// Windows grants exclusive access only while no other handle is open
+	file exclusive;
+	REQUIRE(exclusive.open(firstPath, file::access_mode::Read, file::sys_cache_mode::CachingEnabled, file::sharing_mode::NoSharing));
+	REQUIRE(exclusive.close());
 
-	REQUIRE(f.close());
+	REQUIRE(!f.open(missingPath, file::access_mode::Read));
+	REQUIRE(!f.is_open());
+	REQUIRE(exclusive.open(secondPath, file::access_mode::Read, file::sys_cache_mode::CachingEnabled, file::sharing_mode::NoSharing));
+	REQUIRE(exclusive.close());
+
+	REQUIRE(file::delete_file(firstPath));
 	REQUIRE(file::delete_file(secondPath));
 }
 

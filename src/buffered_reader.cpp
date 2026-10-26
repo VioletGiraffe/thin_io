@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string.h>
+#include <utility>
 
 namespace thin_io {
 
@@ -11,21 +12,35 @@ static_assert(buffered_reader::window_size % window_alignment == 0);
 // Holds window_size bytes from any position despite the rounded-down start
 static constexpr size_t window_capacity = buffered_reader::window_size + window_alignment;
 
-buffered_reader::buffered_reader()
-	: _window{ std::make_unique_for_overwrite<std::byte[]>(window_capacity) }
+buffered_reader::buffered_reader(buffered_reader&& other) noexcept
 {
+	*this = std::move(other);
 }
 
-bool buffered_reader::open(const char* path) noexcept
+buffered_reader& buffered_reader::operator=(buffered_reader&& other) noexcept
+{
+	_file = std::move(other._file);
+	_window = std::move(other._window);
+	_windowStart = other._windowStart;
+	_windowLength = other._windowLength;
+	_pos = other._pos;
+	_endOfFile = other._endOfFile;
+	other.close();
+	return *this;
+}
+
+bool buffered_reader::open(const char* path)
 {
 	close();
+	allocate_window_if_missing();
 	return _file.open(path, file::access_mode::Read);
 }
 
 #ifdef _WIN32
-bool buffered_reader::open(const wchar_t* path) noexcept
+bool buffered_reader::open(const wchar_t* path)
 {
 	close();
+	allocate_window_if_missing();
 	return _file.open(path, file::access_mode::Read);
 }
 #endif
@@ -89,6 +104,12 @@ std::optional<std::span<const std::byte>> buffered_reader::peek(const size_t siz
 
 	const std::span<const std::byte> buffered = buffered_at_pos();
 	return buffered.first(std::min(wanted, buffered.size()));
+}
+
+void buffered_reader::allocate_window_if_missing()
+{
+	if (!_window)
+		_window = std::make_unique_for_overwrite<std::byte[]>(window_capacity);
 }
 
 std::span<const std::byte> buffered_reader::buffered_at_pos() const noexcept

@@ -34,6 +34,7 @@ template <class Impl>
 class [[nodiscard]] file_interface final : public file_constants {
 public:
 	// Read opens an existing file, Write creates or truncates, and ReadWrite opens or creates.
+	// An open file is closed first, even when the new open fails. Child processes never inherit the handle.
 	inline bool open(const char* path,
 					 access_mode accessMode,
 					 sys_cache_mode cacheMode = sys_cache_mode::CachingEnabled,

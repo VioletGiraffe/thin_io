@@ -20,13 +20,16 @@ class [[nodiscard]] buffered_reader {
 public:
 	static constexpr size_t window_size = 128 * 1024;
 
-	// Allocates the window: may throw std::bad_alloc
-	buffered_reader();
+	buffered_reader() noexcept = default;
+	// Leaves other closed, as if newly constructed
+	buffered_reader(buffered_reader&& other) noexcept;
+	buffered_reader& operator=(buffered_reader&& other) noexcept;
 
-	// Opens an existing file for reading, at position 0
-	bool open(const char* path) noexcept;
+	// Opens an existing file for reading, at position 0. The current file is closed first, even when this open fails.
+	// Allocates the window if there is none yet: may throw std::bad_alloc
+	bool open(const char* path);
 #ifdef _WIN32
-	bool open(const wchar_t* path) noexcept;
+	bool open(const wchar_t* path);
 #endif
 	void close() noexcept;
 
@@ -48,6 +51,7 @@ public:
 	[[nodiscard]] static std::string text_for_last_error() noexcept { return file::text_for_last_error(); }
 
 private:
+	void allocate_window_if_missing();
 	// The window's bytes from the position on; empty when the position is outside it
 	[[nodiscard]] std::span<const std::byte> buffered_at_pos() const noexcept;
 	// On success, the position is in the window or at or past _endOfFile

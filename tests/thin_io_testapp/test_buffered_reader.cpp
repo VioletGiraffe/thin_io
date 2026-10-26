@@ -3,6 +3,7 @@
 #include "buffered_reader.hpp"
 
 #include <span>
+#include <utility>
 #include <vector>
 
 using namespace thin_io;
@@ -75,6 +76,48 @@ TEST_CASE("buffered_reader: open", "[buffered_reader]")
 	reader.set_pos(100);
 	REQUIRE(reader.open(testFilePath));
 	REQUIRE(reader.pos() == 0u);
+
+	REQUIRE(!reader.open("buffered_reader_missing.file"));
+	REQUIRE(!reader.is_open());
+}
+
+// Requires the state of a newly constructed reader, which opens and reads normally
+static void requireMovedFrom(buffered_reader& reader)
+{
+	REQUIRE(!reader.is_open());
+	REQUIRE(reader.pos() == 0u);
+	std::byte byte{};
+	REQUIRE(!reader.read(&byte, 1));
+	REQUIRE(!reader.peek(1));
+
+	REQUIRE(reader.open(testFilePath));
+	requireReadAt(reader, 100, 8);
+}
+
+TEST_CASE("buffered_reader: moving", "[buffered_reader]")
+{
+	const TestFile testFile;
+	buffered_reader source;
+	REQUIRE(source.open(testFilePath));
+	requireReadAt(source, 100, 8);
+
+	SECTION("construction")
+	{
+		buffered_reader target{ std::move(source) };
+		REQUIRE(target.pos() == 108u);
+		requireReadAt(target, 0, 8);
+		requireMovedFrom(source);
+	}
+
+	SECTION("assignment")
+	{
+		buffered_reader target;
+		REQUIRE(target.open(testFilePath));
+		target = std::move(source);
+		REQUIRE(target.pos() == 108u);
+		requireReadAt(target, 0, 8);
+		requireMovedFrom(source);
+	}
 }
 
 TEST_CASE("buffered_reader: close", "[buffered_reader]")
