@@ -154,6 +154,10 @@ std::optional<uint64_t> file_impl::write(const void *src, uint64_t size) noexcep
 
 std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos) noexcept
 {
+	// Past any file's end; ReadFile would take offset -2 as "at the file pointer"
+	if (pos > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) [[unlikely]]
+		return 0;
+
 	DWORD bytesRead = 0;
 	OVERLAPPED o;
 	o.Internal = 0;
@@ -174,6 +178,13 @@ std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos
 
 std::optional<uint64_t> file_impl::pwrite(const void *src, uint64_t size, uint64_t pos) noexcept
 {
+	// WriteFile would take offset -1 as "at end of file" and -2 as "at the file pointer"
+	if (pos > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) [[unlikely]]
+	{
+		::SetLastError(ERROR_INVALID_PARAMETER);
+		return {};
+	}
+
 	DWORD bytesWritten = 0;
 	OVERLAPPED o;
 	o.Internal = 0;

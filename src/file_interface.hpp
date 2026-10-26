@@ -149,11 +149,13 @@ public:
 	// !!!
 	// NOTE: Win32: pread / pwrite alter the file position; Linux / POSIX: the position is NOT altered
 	// !!!
-	// A read at or past EOF returns 0 on every platform (Win32's native ERROR_HANDLE_EOF is normalized to that).
+	// A read at or past EOF, any position above INT64_MAX included, returns 0 on every platform (Win32's native
+	// ERROR_HANDLE_EOF is normalized to that).
 	inline std::optional<uint64_t> pread(void* dest, uint64_t size, uint64_t pos) noexcept {
 		return _impl.pread(dest, size, pos);
 	}
 
+	// Fails on a position above INT64_MAX
 	inline std::optional<uint64_t> pwrite(const void* dest, uint64_t size, uint64_t pos) noexcept {
 		return _impl.pwrite(dest, size, pos);
 	}

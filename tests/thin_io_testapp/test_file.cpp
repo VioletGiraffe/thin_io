@@ -619,6 +619,30 @@ TEST_CASE("pwrite", "[file]")
 	REQUIRE(file::delete_file(testFilePath));
 }
 
+TEST_CASE("pread and pwrite at offsets beyond INT64_MAX", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	file::delete_file(testFilePath);
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::ReadWrite, file::open_disposition::CreateOrTruncate));
+	REQUIRE(f.write(testString, sizeof(testString)) == sizeof(testString));
+	// The file pointer at data: Win32 reads offset -2 as "at the file pointer"
+	REQUIRE(f.set_pos(0));
+
+	char buf[sizeof(testString)] = { 0 };
+	for (const uint64_t pos : { uint64_t{ 1 } << 63, ~uint64_t{ 1 }, ~uint64_t{ 0 } })
+	{
+		CHECK(f.pread(buf, sizeof(buf), pos) == 0u);
+		CHECK(!f.pwrite(testString, sizeof(testString), pos));
+	}
+	CHECK(f.size() == sizeof(testString));
+	REQUIRE(f.close());
+
+	REQUIRE(file::delete_file(testFilePath));
+}
+
 TEST_CASE("open on an already open file switches to the new file", "[file]")
 {
 	static constexpr const char firstPath[] = "test-first.file";

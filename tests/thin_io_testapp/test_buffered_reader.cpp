@@ -157,6 +157,15 @@ TEST_CASE("buffered_reader: end of file", "[buffered_reader]")
 	REQUIRE(reader.read(bytes.data(), 50) == 0u);
 	REQUIRE(reader.read(bytes.data(), bytes.size()) == 0u);
 	REQUIRE(reader.pos() == testFileSize + 1000);
+
+	for (const uint64_t pos : { uint64_t{ 1 } << 63, ~uint64_t{ 1 } })
+	{
+		requireReadAt(reader, 0, 8); // Leaves the Win32 file pointer at data
+		reader.set_pos(pos);
+		REQUIRE(reader.read(bytes.data(), 50) == 0u);
+		REQUIRE(reader.read(bytes.data(), bytes.size()) == 0u);
+		REQUIRE(reader.pos() == pos);
+	}
 }
 
 TEST_CASE("buffered_reader: peek", "[buffered_reader]")

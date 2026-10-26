@@ -125,6 +125,10 @@ std::optional<uint64_t> file_impl::write(const void *src, uint64_t size) noexcep
 
 std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos) noexcept
 {
+	// Past any file's end; as off64_t it would be negative and fail with EINVAL
+	if (pos > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) [[unlikely]]
+		return 0;
+
 	const ssize_t bytesRead = ::pread64(_fd, dest, size, static_cast<off64_t>(pos));
 	return bytesRead >= 0 ? static_cast<uint64_t>(bytesRead) : std::optional<uint64_t>{};
 }
