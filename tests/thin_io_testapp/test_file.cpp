@@ -2,6 +2,7 @@
 #include "test_volume.hpp"
 
 #include "file.hpp"
+#include "fs.hpp"
 
 #include <memory.h>
 
@@ -712,6 +713,30 @@ TEST_CASE("write-read sharing", "[file]")
 	REQUIRE(fr.close());
 
 	REQUIRE(file::delete_file(testFilePath));
+}
+
+TEST_CASE("a file open for reading can be renamed and deleted", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char renamedFilePath[] = "test_renamed.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	file::delete_file(testFilePath);
+	file::delete_file(renamedFilePath);
+
+	file fw;
+	REQUIRE(fw.open(testFilePath, file::access_mode::Write));
+	REQUIRE(fw.write(testString, sizeof(testString)) == sizeof(testString));
+	REQUIRE(fw.close());
+
+	file fr;
+	REQUIRE(fr.open(testFilePath, file::access_mode::Read));
+	REQUIRE(rename_entry(testFilePath, renamedFilePath, existing_destination::fail));
+	REQUIRE(file::delete_file(renamedFilePath));
+
+	char buf[sizeof(testString)] = { 0 };
+	REQUIRE(fr.pread(buf, sizeof(buf), 0) == sizeof(buf));
+	REQUIRE(memcmp(buf, testString, sizeof(buf)) == 0);
+	REQUIRE(fr.close());
 }
 
 TEST_CASE("mmap - readonly", "[file]")

@@ -18,19 +18,25 @@ buffered_reader::buffered_reader()
 
 bool buffered_reader::open(const char* path) noexcept
 {
-	_pos = 0;
-	_windowLength = 0;
+	close();
 	return _file.open(path, file::access_mode::Read);
 }
 
 #ifdef _WIN32
 bool buffered_reader::open(const wchar_t* path) noexcept
 {
-	_pos = 0;
-	_windowLength = 0;
+	close();
 	return _file.open(path, file::access_mode::Read);
 }
 #endif
+
+void buffered_reader::close() noexcept
+{
+	// Nothing was written, so a failed close loses nothing
+	(void)_file.close();
+	_pos = 0;
+	_windowLength = 0;
+}
 
 std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) noexcept
 {

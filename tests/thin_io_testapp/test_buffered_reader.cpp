@@ -77,6 +77,24 @@ TEST_CASE("buffered_reader: open", "[buffered_reader]")
 	REQUIRE(reader.pos() == 0u);
 }
 
+TEST_CASE("buffered_reader: close", "[buffered_reader]")
+{
+	const TestFile testFile;
+	buffered_reader reader;
+	REQUIRE(reader.open(testFilePath));
+	requireReadAt(reader, 0, 8);
+
+	reader.close();
+	REQUIRE(!reader.is_open());
+	reader.set_pos(0);
+	std::byte byte{};
+	REQUIRE(!reader.read(&byte, 1));
+	REQUIRE(!reader.peek(1));
+
+	REQUIRE(reader.open(testFilePath));
+	requireReadAt(reader, 0, 8);
+}
+
 TEST_CASE("buffered_reader: small reads at scattered positions", "[buffered_reader]")
 {
 	const TestFile testFile;

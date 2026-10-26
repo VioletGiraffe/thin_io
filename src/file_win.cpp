@@ -48,7 +48,7 @@ static_assert(sizeof(file_impl) == sizeof(HANDLE) + sizeof(std::vector<int>)); /
 [[nodiscard]] static inline constexpr DWORD shareMask(file_constants::access_mode accessMode, file_constants::sharing_mode sharing)
 {
 	if (sharing == file_constants::sharing_mode::Default)
-		return accessMode == file_constants::access_mode::Read ? (FILE_SHARE_READ | FILE_SHARE_WRITE) : FILE_SHARE_READ;
+		return accessMode == file_constants::access_mode::Read ? (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) : FILE_SHARE_READ;
 
 	return static_cast<DWORD>(sharing);
 }

@@ -26,6 +26,7 @@ public:
 #ifdef _WIN32
 	bool open(const wchar_t* path) noexcept;
 #endif
+	void close() noexcept;
 
 	[[nodiscard]] bool is_open() const noexcept { return _file.is_open(); }
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept { return _file.size(); }

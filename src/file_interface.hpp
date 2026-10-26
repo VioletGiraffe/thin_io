@@ -17,7 +17,9 @@ struct file_constants {
 	enum class sys_cache_mode {CachingEnabled = 0, NoOsCaching = 1};
 	// Sharing is enforced only on Windows; POSIX opens ignore it. Default resolves per access mode: writable opens
 	// allow concurrent readers, and read-only opens additionally tolerate concurrent writers, so that a file already
-	// open for writing elsewhere can still be read. An explicit value is passed to the OS exactly as given.
+	// open for writing elsewhere can still be read, and allow deleting and renaming the file, as POSIX does.
+	// Where deletion is not POSIX-style (FAT, SMB), a deleted file's name stays unusable until such a handle closes.
+	// An explicit value is passed to the OS exactly as given.
 	// ShareExec equals ShareRead: NT's share-access check classifies execute access as read, so they cannot differ.
 	enum class sharing_mode {NoSharing = 0, ShareRead = 1, ShareWrite = 2, ShareDelete = 4, ShareExec = ShareRead, Default = 0xFF};
 	enum class mmap_access_mode {ReadOnly = 0, ReadWrite = 1};
