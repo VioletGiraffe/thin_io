@@ -15,13 +15,15 @@ namespace thin_io {
 // - The end of file is kept once a read finds it: reads and peeks at or past it cost no I/O.
 // - What was read is a snapshot: later changes to the file, growth included, may go unseen until open.
 // - Only positional reads are issued: a seek never reaches the OS.
-// - Reads of at least window_size bytes go straight to the destination.
+// - Reads of at least window_size() bytes go straight to the destination.
 class [[nodiscard]] buffered_reader {
 public:
-	static constexpr size_t window_size = 128 * 1024;
+	static constexpr size_t default_window_size = 128 * 1024;
 
 	buffered_reader() noexcept = default;
-	// Leaves other closed, as if newly constructed
+	// windowSize is rounded down to a multiple of 4 KB, at least 4 KB
+	explicit buffered_reader(size_t windowSize) noexcept;
+	// Leaves other closed, as if newly constructed with the same window size
 	buffered_reader(buffered_reader&& other) noexcept;
 	buffered_reader& operator=(buffered_reader&& other) noexcept;
 
@@ -35,6 +37,7 @@ public:
 
 	[[nodiscard]] bool is_open() const noexcept { return _file.is_open(); }
 	[[nodiscard]] std::optional<uint64_t> size() const noexcept { return _file.size(); }
+	[[nodiscard]] size_t window_size() const noexcept { return _windowSize; }
 
 	// Any position, end of file and past it included
 	[[nodiscard]] uint64_t pos() const noexcept { return _pos; }
@@ -42,7 +45,7 @@ public:
 
 	// Fewer bytes than requested only at end of file. Fails without moving the position.
 	std::optional<uint64_t> read(void* dest, uint64_t size) noexcept;
-	// min(size, window_size) bytes at the position, which stays put; fewer only at end of file.
+	// min(size, window_size()) bytes at the position, which stays put; fewer only at end of file.
 	// Valid until the next read, peek or open.
 	std::optional<std::span<const std::byte>> peek(size_t size) noexcept;
 
@@ -51,6 +54,7 @@ public:
 	[[nodiscard]] static std::string text_for_last_error() noexcept { return file::text_for_last_error(); }
 
 private:
+	[[nodiscard]] size_t window_capacity() const noexcept;
 	void allocate_window_if_missing();
 	// The window's bytes from the position on; empty when the position is outside it
 	[[nodiscard]] std::span<const std::byte> buffered_at_pos() const noexcept;
@@ -59,6 +63,7 @@ private:
 
 private:
 	file _file;
+	size_t _windowSize = default_window_size;
 	std::unique_ptr<std::byte[]> _window;
 	uint64_t _windowStart = 0;
 	uint64_t _windowLength = 0;

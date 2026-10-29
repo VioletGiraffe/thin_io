@@ -7,10 +7,13 @@
 namespace thin_io {
 
 // Window starts are rounded down to this: page-aligned reads, and room for short backward seeks
-static constexpr uint64_t window_alignment = 4096;
-static_assert(buffered_reader::window_size % window_alignment == 0);
-// Holds window_size bytes from any position despite the rounded-down start
-static constexpr size_t window_capacity = buffered_reader::window_size + window_alignment;
+static constexpr size_t window_alignment = 4096;
+static_assert(buffered_reader::default_window_size % window_alignment == 0);
+
+buffered_reader::buffered_reader(const size_t windowSize) noexcept :
+	_windowSize{ std::max(window_alignment, windowSize - windowSize % window_alignment) }
+{
+}
 
 buffered_reader::buffered_reader(buffered_reader&& other) noexcept
 {
@@ -20,6 +23,7 @@ buffered_reader::buffered_reader(buffered_reader&& other) noexcept
 buffered_reader& buffered_reader::operator=(buffered_reader&& other) noexcept
 {
 	_file = std::move(other._file);
+	_windowSize = other._windowSize;
 	_window = std::move(other._window);
 	_windowStart = other._windowStart;
 	_windowLength = other._windowLength;
@@ -71,7 +75,7 @@ std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) n
 		}
 		else if (_pos >= _endOfFile)
 			break;
-		else if (remaining >= window_size)
+		else if (remaining >= _windowSize)
 		{
 			const auto n = _file.pread(out + total, remaining, _pos);
 			if (!n)
@@ -98,7 +102,7 @@ std::optional<uint64_t> buffered_reader::read(void* dest, const uint64_t size) n
 
 std::optional<std::span<const std::byte>> buffered_reader::peek(const size_t size) noexcept
 {
-	const auto wanted = static_cast<size_t>(std::min<uint64_t>({ size, window_size, _endOfFile - std::min(_pos, _endOfFile) }));
+	const auto wanted = static_cast<size_t>(std::min<uint64_t>({ size, _windowSize, _endOfFile - std::min(_pos, _endOfFile) }));
 	if (buffered_at_pos().size() < wanted && !fill_window_at_pos())
 		return {};
 
@@ -106,10 +110,16 @@ std::optional<std::span<const std::byte>> buffered_reader::peek(const size_t siz
 	return buffered.first(std::min(wanted, buffered.size()));
 }
 
+// Holds window_size() bytes from any position despite the rounded-down start
+size_t buffered_reader::window_capacity() const noexcept
+{
+	return _windowSize + window_alignment;
+}
+
 void buffered_reader::allocate_window_if_missing()
 {
 	if (!_window)
-		_window = std::make_unique_for_overwrite<std::byte[]>(window_capacity);
+		_window = std::make_unique_for_overwrite<std::byte[]>(window_capacity());
 }
 
 std::span<const std::byte> buffered_reader::buffered_at_pos() const noexcept
@@ -124,11 +134,12 @@ std::span<const std::byte> buffered_reader::buffered_at_pos() const noexcept
 bool buffered_reader::fill_window_at_pos() noexcept
 {
 	const uint64_t start = _pos - _pos % window_alignment;
+	const size_t capacity = window_capacity();
 	uint64_t length = 0;
 	// pread may transfer less than requested before the end of file
-	while (length < window_capacity)
+	while (length < capacity)
 	{
-		const auto n = _file.pread(_window.get() + length, window_capacity - length, start + length);
+		const auto n = _file.pread(_window.get() + length, capacity - length, start + length);
 		if (!n)
 		{
 			_windowLength = 0;

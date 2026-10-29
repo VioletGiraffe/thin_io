@@ -10,7 +10,7 @@ using namespace thin_io;
 
 static constexpr const char testFilePath[] = "buffered_reader_test.file";
 // Spans two window refills and ends mid-window
-static constexpr uint64_t testFileSize = 2 * buffered_reader::window_size + 12345;
+static constexpr uint64_t testFileSize = 2 * buffered_reader::default_window_size + 12345;
 
 // A byte pattern that differs between nearby positions and between windows
 static std::byte expectedByte(const uint64_t pos)
@@ -159,10 +159,10 @@ TEST_CASE("buffered_reader: small reads at scattered positions", "[buffered_read
 		requireReadAt(reader, 5000, 16);
 		requireReadAt(reader, 4999, 16);
 		requireReadAt(reader, 3, 4);
-		requireReadAt(reader, buffered_reader::window_size + 700, 64);
+		requireReadAt(reader, buffered_reader::default_window_size + 700, 64);
 		requireReadAt(reader, 100, 64);
-		requireReadAt(reader, buffered_reader::window_size - 10, 20); // straddles a window's end
-		requireReadAt(reader, 2 * buffered_reader::window_size + 9000, 100);
+		requireReadAt(reader, buffered_reader::default_window_size + 4096 - 10, 20); // straddles the end of the window read at 3
+		requireReadAt(reader, 2 * buffered_reader::default_window_size + 9000, 100);
 		requireReadAt(reader, 0, 1);
 	}
 }
@@ -176,8 +176,8 @@ TEST_CASE("buffered_reader: reads at least as large as the window", "[buffered_r
 	// Partly served from the window the peek filled
 	REQUIRE(reader.peek(3).has_value());
 	requireReadAt(reader, 0, testFileSize);
-	requireReadAt(reader, 777, buffered_reader::window_size);
-	requireReadAt(reader, 1, buffered_reader::window_size + 3);
+	requireReadAt(reader, 777, buffered_reader::default_window_size);
+	requireReadAt(reader, 1, buffered_reader::default_window_size + 3);
 }
 
 TEST_CASE("buffered_reader: end of file", "[buffered_reader]")
@@ -186,7 +186,7 @@ TEST_CASE("buffered_reader: end of file", "[buffered_reader]")
 	buffered_reader reader;
 	REQUIRE(reader.open(testFilePath));
 
-	std::vector<std::byte> bytes(buffered_reader::window_size + 50);
+	std::vector<std::byte> bytes(buffered_reader::default_window_size + 50);
 
 	reader.set_pos(testFileSize - 10);
 	REQUIRE(reader.read(bytes.data(), 50) == 10u);
@@ -229,7 +229,7 @@ TEST_CASE("buffered_reader: no I/O at a known end of file", "[buffered_reader]")
 	const TestFile testFile;
 	buffered_reader reader;
 	REQUIRE(reader.open(testFilePath));
-	std::vector<std::byte> bytes(buffered_reader::window_size + 50);
+	std::vector<std::byte> bytes(buffered_reader::default_window_size + 50);
 
 	SECTION("reads and peeks at or across it")
 	{
@@ -253,7 +253,7 @@ TEST_CASE("buffered_reader: no I/O at a known end of file", "[buffered_reader]")
 	{
 		requireReadAt(reader, 0, 8);
 		// Far enough past the end for the window start, rounded down, to be past it too
-		reader.set_pos(testFileSize + buffered_reader::window_size);
+		reader.set_pos(testFileSize + buffered_reader::default_window_size);
 		REQUIRE(reader.read(bytes.data(), 50) == 0u);
 		pwriteToTestFile(std::vector<std::byte>(8, std::byte{ 0xAA }), 0);
 		requireReadAt(reader, 0, 8);
@@ -280,27 +280,27 @@ TEST_CASE("buffered_reader: peek", "[buffered_reader]")
 	SECTION("refills a window that holds only part of the request")
 	{
 		requireReadAt(reader, 0, 1);
-		reader.set_pos(buffered_reader::window_size - 2);
-		const auto peeked = reader.peek(buffered_reader::window_size);
+		reader.set_pos(buffered_reader::default_window_size - 2);
+		const auto peeked = reader.peek(buffered_reader::default_window_size);
 		REQUIRE(peeked.has_value());
-		REQUIRE(peeked->size() == buffered_reader::window_size);
-		REQUIRE(matchesFileAt(*peeked, buffered_reader::window_size - 2));
+		REQUIRE(peeked->size() == buffered_reader::default_window_size);
+		REQUIRE(matchesFileAt(*peeked, buffered_reader::default_window_size - 2));
 	}
 
 	SECTION("returns the whole request at an unaligned position")
 	{
 		reader.set_pos(100);
-		const auto peeked = reader.peek(buffered_reader::window_size);
+		const auto peeked = reader.peek(buffered_reader::default_window_size);
 		REQUIRE(peeked.has_value());
-		REQUIRE(peeked->size() == buffered_reader::window_size);
+		REQUIRE(peeked->size() == buffered_reader::default_window_size);
 		REQUIRE(matchesFileAt(*peeked, 100));
 	}
 
 	SECTION("is limited to the window size and to the end of file")
 	{
-		const auto whole = reader.peek(buffered_reader::window_size * 2);
+		const auto whole = reader.peek(buffered_reader::default_window_size * 2);
 		REQUIRE(whole.has_value());
-		REQUIRE(whole->size() == buffered_reader::window_size);
+		REQUIRE(whole->size() == buffered_reader::default_window_size);
 
 		reader.set_pos(testFileSize - 5);
 		const auto tail = reader.peek(8);
@@ -311,5 +311,50 @@ TEST_CASE("buffered_reader: peek", "[buffered_reader]")
 		const auto pastEnd = reader.peek(8);
 		REQUIRE(pastEnd.has_value());
 		REQUIRE(pastEnd->empty());
+	}
+}
+
+TEST_CASE("buffered_reader: window size", "[buffered_reader]")
+{
+	REQUIRE(buffered_reader{}.window_size() == buffered_reader::default_window_size);
+	REQUIRE(buffered_reader{ 0 }.window_size() == 4096u);
+	REQUIRE(buffered_reader{ 6000 }.window_size() == 4096u);
+	REQUIRE(buffered_reader{ 8192 }.window_size() == 8192u);
+
+	const TestFile testFile;
+	buffered_reader reader{ 8192 };
+	REQUIRE(reader.open(testFilePath));
+
+	SECTION("small reads at scattered positions")
+	{
+		requireReadAt(reader, 5000, 16); // fills [4096, 16384)
+		requireReadAt(reader, 16384 - 10, 20); // straddles its end
+		requireReadAt(reader, 100000, 64);
+		requireReadAt(reader, 4999, 16);
+	}
+
+	SECTION("peek is limited to it")
+	{
+		reader.set_pos(100);
+		const auto peeked = reader.peek(3 * 8192);
+		REQUIRE(peeked.has_value());
+		REQUIRE(peeked->size() == 8192u);
+		REQUIRE(matchesFileAt(*peeked, 100));
+	}
+
+	SECTION("reads at least as large as the window")
+	{
+		requireReadAt(reader, 777, 8192);
+		requireReadAt(reader, 1, 3 * 8192 + 3);
+	}
+
+	SECTION("moving keeps it on both readers")
+	{
+		requireReadAt(reader, 100, 8);
+		buffered_reader target{ std::move(reader) };
+		REQUIRE(target.window_size() == 8192u);
+		REQUIRE(reader.window_size() == 8192u);
+		requireReadAt(target, 0, 8);
+		requireMovedFrom(reader);
 	}
 }
