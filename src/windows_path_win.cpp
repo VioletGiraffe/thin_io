@@ -325,4 +325,24 @@ bool windows_path_buffer::append_directory_search_pattern() noexcept
 	return true;
 }
 
+bool isUncShareRoot(std::wstring_view path) noexcept
+{
+	if (!path.starts_with(extendedUncPrefix))
+		return false;
+
+	if (path.ends_with(L'\\'))
+		path.remove_suffix(1);
+	const size_t serverEnd = path.find(L'\\', extendedUncPrefixLength);
+	return serverEnd != std::wstring_view::npos && serverEnd + 1 < path.size() && path.find(L'\\', serverEnd + 1) == std::wstring_view::npos;
+}
+
+bool isRootPath(const std::wstring_view path) noexcept
+{
+	const std::wstring_view drivePath = path.starts_with(extendedPrefix) ? path.substr(extendedPrefixLength) : path;
+	if (drivePath == L"\\" || (drivePath.size() == 3 && drivePath[1] == L':' && drivePath[2] == L'\\'))
+		return true;
+
+	return isUncShareRoot(path);
+}
+
 } // namespace thin_io

@@ -1,5 +1,6 @@
 #include "fs.hpp"
 #include "attributes_win.hpp"
+#include "handle_win.hpp"
 #include "timestamp_win.hpp"
 #include "windows_path_win.hpp"
 
@@ -144,30 +145,6 @@ private:
 	HANDLE _handle;
 };
 
-class file_handle final {
-public:
-	explicit file_handle(const HANDLE handle) noexcept : _handle{handle} {}
-	~file_handle() noexcept
-	{
-		if (_handle != INVALID_HANDLE_VALUE)
-			::CloseHandle(_handle);
-	}
-
-	file_handle(const file_handle&) = delete;
-	file_handle& operator=(const file_handle&) = delete;
-
-	[[nodiscard]] std::optional<filesystem_error> close() noexcept
-	{
-		if (::CloseHandle(std::exchange(_handle, INVALID_HANDLE_VALUE)) != 0)
-			return {};
-
-		return capture_last_filesystem_error();
-	}
-
-private:
-	HANDLE _handle;
-};
-
 [[nodiscard]] entry_attributes attributesFromWindows(const DWORD nativeAttributes, const DWORD reparseTag) noexcept
 {
 	entry_attributes attributes;
@@ -249,30 +226,6 @@ private:
 [[nodiscard]] bool isDotEntry(const std::wstring_view name) noexcept
 {
 	return name == L"." || name == L"..";
-}
-
-// With or without one trailing separator.
-[[nodiscard]] bool isUncShareRoot(std::wstring_view path) noexcept
-{
-	static constexpr std::wstring_view extendedUncPrefix = LR"(\\?\UNC\)";
-	if (!path.starts_with(extendedUncPrefix))
-		return false;
-
-	if (path.ends_with(L'\\'))
-		path.remove_suffix(1);
-	const size_t serverEnd = path.find(L'\\', extendedUncPrefix.size());
-	return serverEnd != std::wstring_view::npos && serverEnd + 1 < path.size() && path.find(L'\\', serverEnd + 1) == std::wstring_view::npos;
-}
-
-// A prepared path naming a drive root, the current drive's root, or a UNC share root.
-[[nodiscard]] bool isRootPath(const std::wstring_view path) noexcept
-{
-	static constexpr std::wstring_view extendedPrefix = LR"(\\?\)";
-	const std::wstring_view drivePath = path.starts_with(extendedPrefix) ? path.substr(extendedPrefix.size()) : path;
-	if (drivePath == L"\\" || (drivePath.size() == 3 && drivePath[1] == L':' && drivePath[2] == L'\\'))
-		return true;
-
-	return isUncShareRoot(path);
 }
 
 // FindFirstFileExW also reports ERROR_FILE_NOT_FOUND when the wildcard matched nothing. Verifying the directory after
@@ -363,32 +316,6 @@ template <class Character>
 	if (const auto closeError = handle.close()) [[unlikely]]
 		return std::unexpected{*closeError};
 	return entries;
-}
-
-// FILE_ID_128, or the 64-bit file index on a filesystem without it, such as FAT and exFAT.
-// The entry part can be all zeros: see getEntryMetadata().
-[[nodiscard]] std::optional<entry_identity> identityForHandle(const HANDLE handle) noexcept
-{
-	entry_identity identity;
-
-	FILE_ID_INFO fileIdInfo{};
-	if (::GetFileInformationByHandleEx(handle, FileIdInfo, &fileIdInfo, sizeof(fileIdInfo)) != 0)
-	{
-		identity.filesystem = fileIdInfo.VolumeSerialNumber;
-		for (size_t i = 0; i < identity.entry.size(); ++i)
-			identity.entry[i] = fileIdInfo.FileId.Identifier[i];
-		return identity;
-	}
-
-	BY_HANDLE_FILE_INFORMATION info;
-	if (::GetFileInformationByHandle(handle, &info) == 0)
-		return {};
-
-	identity.filesystem = info.dwVolumeSerialNumber;
-	const uint64_t fileIndex = (uint64_t{info.nFileIndexHigh} << 32) | info.nFileIndexLow;
-	for (size_t i = 0; i < sizeof(fileIndex); ++i)
-		identity.entry[i] = static_cast<uint8_t>(fileIndex >> (8 * i));
-	return identity;
 }
 
 // The caller closes the returned handle.

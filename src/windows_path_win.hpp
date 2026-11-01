@@ -4,6 +4,7 @@
 
 #include <array>
 #include <stddef.h>
+#include <string_view>
 
 namespace thin_io {
 
@@ -33,5 +34,11 @@ private:
 	size_t _length = 0;
 	DWORD _error = ERROR_SUCCESS;
 };
+
+// With or without one trailing separator.
+[[nodiscard]] bool isUncShareRoot(std::wstring_view path) noexcept;
+
+// A prepared path naming a drive root, the current drive's root, or a UNC share root.
+[[nodiscard]] bool isRootPath(std::wstring_view path) noexcept;
 
 } // namespace thin_io
