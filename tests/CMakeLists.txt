@@ -21,6 +21,7 @@ add_executable(${TARGET_NAME}
 
 if (WIN32)
 	target_sources(${TARGET_NAME} PRIVATE
+		thin_io_testapp/test_directory_watcher.cpp
 		thin_io_testapp/test_file_win.cpp
 		thin_io_testapp/test_windows_path.cpp
 	)

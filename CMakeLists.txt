@@ -72,6 +72,7 @@ endif()
 
 add_library(${TARGET_NAME} STATIC
 	src/buffered_reader.hpp
+	src/directory_watcher.hpp
 	src/enum_helpers.hpp
 	src/file.hpp
 	src/file_interface.hpp

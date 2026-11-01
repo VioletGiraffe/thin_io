@@ -1,14 +1,15 @@
 # Thin IO
 
 A lightweight cross-platform C++ file library built directly on native system APIs, without `<stdio>`, `<fstream>`,
-or Qt. It provides synchronous binary file I/O, buffered reading, mapping, resizing, preallocation, deletion, and file
-or directory timestamps. Serialization, recursive traversal, and asynchronous execution are left to the caller.
+or Qt. It provides synchronous binary file I/O, buffered reading, mapping, resizing, preallocation, deletion, file
+or directory timestamps, and directory change watching.
 
 | Header | Facility |
 |---|---|
 | [`src/file_interface.hpp`](src/file_interface.hpp) | The main file interface |
 | [`src/buffered_reader.hpp`](src/buffered_reader.hpp) | Read-only access for many small reads at scattered positions: a window keeps the bytes already read, so seeks within it cost no I/O |
 | [`src/fs.hpp`](src/fs.hpp) | Timestamp operations, and synchronous single-directory discovery and accounting |
+| [`src/directory_watcher.hpp`](src/directory_watcher.hpp) | Change notifications for one directory or a subtree |
 | [`src/qt_paths.hpp`](src/qt_paths.hpp) | Header-only conversion between `QString` and native paths, for callers that use Qt; the library itself does not |
 
 ## Native path contract
@@ -156,6 +157,29 @@ and identity of the containing filesystem:
 `available` cannot exceed `free` or caller-visible `capacity`. On Windows, volume-wide `free` can exceed
 quota-reduced `capacity`; callers must not assume `free <= capacity` there. Filesystem identity is absent when a
 Windows filesystem exposes no volume serial number.
+
+## Directory change watching
+
+`directory_watcher` watches one directory, or the subtree under it, and reports entries created, removed, modified,
+changed in metadata alone, and renamed, with paths relative to the root. Implemented on Windows so far.
+
+- thin_io starts no threads. The caller waits on `wait_handle()` (an event handle on Windows, an fd on POSIX) in its
+  own event loop, or blocks in `wait_for_events()` or `wait_for_any()`.
+- The operating system runs thin_io code on its own thread in the Windows volume notification callback. A mutex in each
+  watcher guards its state against it.
+- A deleted, moved or replaced root ends the watch with a `stopped` event and its reason. The watcher never re-arms
+  itself: the caller watches the path again.
+- An open watch never blocks an eject: it releases its handles when the volume is locked for eject, dismounted or
+  removed, and reports `stopped`.
+- `coverage()` is `partial` for remote volumes, where a server may never send notifications although the watch arms
+  fine. A caller that must not miss changes there polls.
+
+Limits:
+
+- Windows: the root's parent and every further ancestor cannot be renamed while the watch is held.
+- Windows: one `wait_for_any()` call takes at most 64 handles: 63 watchers with a waker, 64 without.
+- FAT and exFAT identify an entry by its position in its directory, so a root replaced under the same name may go
+  unrecognized there.
 
 ## Building the library
 
