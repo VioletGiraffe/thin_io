@@ -10,6 +10,7 @@ add_executable(${TARGET_NAME}
 	thin_io_testapp/main.cpp
 	thin_io_testapp/test_buffered_reader.cpp
 	thin_io_testapp/test_directory_enumeration.cpp
+	thin_io_testapp/test_directory_snapshot.cpp
 	thin_io_testapp/test_entry_metadata.cpp
 	thin_io_testapp/test_file.cpp
 	thin_io_testapp/test_file_links.cpp

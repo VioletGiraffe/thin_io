@@ -96,6 +96,7 @@ SOURCES += \
 	main.cpp \
 	test_buffered_reader.cpp \
 	test_directory_enumeration.cpp \
+	test_directory_snapshot.cpp \
 	test_entry_metadata.cpp \
 	test_file.cpp \
 	test_file_links.cpp \

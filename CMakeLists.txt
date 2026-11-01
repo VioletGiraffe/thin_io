@@ -72,6 +72,7 @@ endif()
 
 add_library(${TARGET_NAME} STATIC
 	src/buffered_reader.hpp
+	src/directory_snapshot.hpp
 	src/directory_watcher.hpp
 	src/enum_helpers.hpp
 	src/file.hpp
@@ -80,6 +81,7 @@ add_library(${TARGET_NAME} STATIC
 	src/filesystem_types.hpp
 	src/fs.hpp
 	src/buffered_reader.cpp
+	src/directory_snapshot.cpp
 	src/filesystem_error.cpp
 	${PLATFORM_FILES}
 )

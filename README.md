@@ -10,6 +10,7 @@ or directory timestamps, and directory change watching.
 | [`src/buffered_reader.hpp`](src/buffered_reader.hpp) | Read-only access for many small reads at scattered positions: a window keeps the bytes already read, so seeks within it cost no I/O |
 | [`src/fs.hpp`](src/fs.hpp) | Timestamp operations, and synchronous single-directory discovery and accounting |
 | [`src/directory_watcher.hpp`](src/directory_watcher.hpp) | Change notifications for one directory or a subtree |
+| [`src/directory_snapshot.hpp`](src/directory_snapshot.hpp) | Polling one directory for changes where notifications may never arrive |
 | [`src/qt_paths.hpp`](src/qt_paths.hpp) | Header-only conversion between `QString` and native paths, for callers that use Qt; the library itself does not |
 
 ## Native path contract
@@ -172,7 +173,9 @@ changed in metadata alone, and renamed, with paths relative to the root. Impleme
 - An open watch never blocks an eject: it releases its handles when the volume is locked for eject, dismounted or
   removed, and reports `stopped`.
 - `coverage()` is `partial` for remote volumes, where a server may never send notifications although the watch arms
-  fine. A caller that must not miss changes there polls.
+  fine. A caller that must not miss changes there polls with `directory_snapshot`
+  ([`src/directory_snapshot.hpp`](src/directory_snapshot.hpp)): two snapshots of a directory compare unequal when an
+  entry was added, removed or renamed, or changed in size, modification time, attributes or permissions.
 
 Limits:
 

@@ -71,6 +71,7 @@ INCLUDEPATH += ../cpp-template-utils
 
 HEADERS += \
 	src/buffered_reader.hpp \
+	src/directory_snapshot.hpp \
 	src/directory_watcher.hpp \
 	src/enum_helpers.hpp \
 	src/file.hpp \
@@ -81,6 +82,7 @@ HEADERS += \
 
 SOURCES += \
 	src/buffered_reader.cpp \
+	src/directory_snapshot.cpp \
 	src/filesystem_error.cpp
 
 win*{
