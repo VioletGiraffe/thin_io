@@ -14,7 +14,14 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
+
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <unistd.h>
+#endif
 
 using namespace thin_io;
 using namespace std::chrono_literals;
@@ -166,6 +173,29 @@ private:
 	auto watcher = directory_watcher::watch(root.c_str(), std::move(options));
 	REQUIRE(watcher);
 	return std::move(*watcher);
+}
+
+// The working directory when it is the root of its volume, as the CI test volumes are
+[[nodiscard]] std::optional<native_string> workingDirectoryIfVolumeRoot()
+{
+#ifdef _WIN32
+	wchar_t directory[MAX_PATH]{};
+	const DWORD length = ::GetCurrentDirectoryW(MAX_PATH, directory);
+	if (length != 3 || directory[1] != L':' || directory[2] != L'\\')
+		return {};
+	return native_string{ directory };
+#else
+	const auto here = get_entry_metadata(".", link_behavior::follow);
+	const auto parent = get_entry_metadata("..", link_behavior::follow);
+	if (!here || !parent || !here->mount_id || here->mount_id == parent->mount_id)
+		return {};
+
+	char* const directory = ::getcwd(nullptr, 0);
+	REQUIRE(directory != nullptr);
+	native_string path{ directory };
+	::free(directory);
+	return path;
+#endif
 }
 
 } // namespace
@@ -555,3 +585,117 @@ TEST_CASE("directory_watcher::watch fails for a missing path and for a file", "[
 	CHECK(regularFile.error().native_code == ERROR_DIRECTORY);
 #endif
 }
+
+TEST_CASE("directory_watcher reports every entry of a burst, or an overflow", "[watcher]")
+{
+	scratch_tree tree{ "watcher-burst" };
+	directory_watcher watcher = watchTree(tree.root(), { .recursive = false });
+
+	// Nothing reads while they are made: their records exceed a Windows watch's 64 KB buffer.
+	std::vector<native_string> names;
+	for (int i = 0; i < 2000; ++i)
+	{
+		const std::string name = "watcher-burst-entry-" + std::to_string(i);
+		writeFile(tree.path(name), {});
+		names.push_back(native(name));
+	}
+
+	(void)readUntil(watcher, [&names](const std::vector<watch_event>& read) {
+		if (std::ranges::any_of(read, [](const watch_event& event) { return event.kind == watch_event_kind::overflow; }))
+			return true;
+
+		std::unordered_set<native_string> created;
+		for (const watch_event& event : read)
+		{
+			if (event.kind == watch_event_kind::created)
+				created.insert(event.path);
+		}
+		return std::ranges::all_of(names, [&created](const native_string& name) { return created.contains(name); });
+	});
+}
+
+TEST_CASE("directory_watcher watches a root spelled in another case where the filesystem ignores case", "[watcher][root]")
+{
+	scratch_tree tree{ "watcher-case" };
+	const native_string otherCase = native("WATCHER-CASE");
+	if (!get_entry_status(otherCase.c_str(), link_behavior::follow))
+	{
+		WARN("This filesystem distinguishes case: test skipped");
+		return;
+	}
+
+	directory_watcher watcher = watchTree(otherCase, { .recursive = false });
+	writeFile(tree.path("a.txt"), "x");
+	const auto events = readUntilEvent(watcher, watch_event_kind::created, "a.txt");
+	CHECK(stopEvent(events) == nullptr);
+}
+
+TEST_CASE("directory_watcher watches the root of a volume", "[watcher][root]")
+{
+	const auto volumeRoot = workingDirectoryIfVolumeRoot();
+	if (!volumeRoot)
+	{
+		WARN("The working directory is not the root of a volume: test skipped");
+		return;
+	}
+
+	const native_string file = native("watcher-volume-root.txt");
+	(void)remove_entry(file.c_str());
+	directory_watcher watcher = watchTree(*volumeRoot, { .recursive = false });
+
+	writeFile(file, "x");
+	const auto created = readUntilEvent(watcher, watch_event_kind::created, "watcher-volume-root.txt");
+	CHECK(stopEvent(created) == nullptr);
+	REQUIRE(remove_entry(file.c_str()));
+	(void)readUntilEvent(watcher, watch_event_kind::removed, "watcher-volume-root.txt");
+}
+
+#ifndef _WIN32
+TEST_CASE("POSIX: directory_watcher watches a root reached through a symbolic link", "[watcher][root]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree tree{ "watcher-link" };
+	REQUIRE(create_directory(tree.path("target").c_str()));
+	REQUIRE(::symlink("target", tree.path("link").c_str()) == 0);
+	directory_watcher watcher = watchTree(tree.path("link"), { .recursive = false });
+
+	writeFile(tree.path("target/a.txt"), "x");
+	const auto events = readUntilEvent(watcher, watch_event_kind::created, "a.txt");
+	CHECK(stopEvent(events) == nullptr);
+}
+#endif
+
+#ifdef __linux__
+TEST_CASE("Linux: a directory that cannot be watched makes the coverage partial", "[watcher]")
+{
+	if (test_volume::permissionBitsUnsupported())
+		return;
+	if (::geteuid() == 0)
+	{
+		WARN("Root reads every directory: test skipped");
+		return;
+	}
+
+	scratch_tree tree{ "watcher-unwatchable" };
+	REQUIRE(create_directory(tree.path("ancestor").c_str()));
+	REQUIRE(create_directory(tree.path("ancestor/root").c_str()));
+	REQUIRE(create_directory(tree.path("parent").c_str()));
+	REQUIRE(create_directory(tree.path("parent/child").c_str()));
+
+	// inotify needs read permission: an execute-only directory can be passed through, not watched.
+	REQUIRE(set_permissions(tree.path("ancestor").c_str(), file_permissions{ .mode = 0111 }, link_behavior::do_not_follow));
+	REQUIRE(set_permissions(tree.path("parent/child").c_str(), file_permissions{ .mode = 0111 }, link_behavior::do_not_follow));
+	const directory_watcher belowAncestor = watchTree(tree.path("ancestor/root"), { .recursive = false });
+	const directory_watcher aboveChild = watchTree(tree.path("parent"), { .recursive = true });
+	const directory_watcher besideChild = watchTree(tree.path("parent"), { .recursive = false });
+	REQUIRE(set_permissions(tree.path("ancestor").c_str(), file_permissions{ .mode = 0755 }, link_behavior::do_not_follow));
+	REQUIRE(set_permissions(tree.path("parent/child").c_str(), file_permissions{ .mode = 0755 }, link_behavior::do_not_follow));
+
+	CHECK(belowAncestor.coverage() == watch_coverage::partial);
+	CHECK(aboveChild.coverage() == watch_coverage::partial);
+	// A non-recursive watch places none on its children.
+	CHECK(besideChild.coverage() == watch_coverage::complete);
+}
+#endif
