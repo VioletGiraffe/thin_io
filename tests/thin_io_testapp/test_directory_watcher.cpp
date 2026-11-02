@@ -216,6 +216,23 @@ TEST_CASE("directory_watcher reports a file created, modified and removed", "[wa
 	(void)readUntilEvent(watcher, watch_event_kind::removed, "a.txt");
 }
 
+// FSEvents can report a change made just before its stream started, and does so only some of the time: hence the rounds.
+TEST_CASE("directory_watcher reports no change made before watch() returned", "[watcher]")
+{
+	scratch_tree tree{ "watcher-before-start" };
+	for (int round = 0; round < 20; ++round)
+	{
+		const std::string earlier = "earlier-" + std::to_string(round);
+		const std::string marker = "marker-" + std::to_string(round);
+		writeFile(tree.path(earlier), "contents");
+
+		directory_watcher watcher = watchTree(tree.root(), { .recursive = false });
+		const auto events = readThroughMarker(watcher, tree, marker);
+		INFO(describe(events));
+		CHECK(std::ranges::all_of(events, [&](const watch_event& event) { return event.path == native(marker); }));
+	}
+}
+
 TEST_CASE("directory_watcher reports a rename as one event with both names", "[watcher]")
 {
 	scratch_tree tree{ "watcher-rename" };

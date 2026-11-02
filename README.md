@@ -185,7 +185,8 @@ Limits:
   each watcher takes an inotify instance out of `fs.inotify.max_user_instances` (128 by default). Both limits are
   shared by every process of the user.
 - macOS: FSEvents has no non-recursive mode, so a non-recursive watch still receives the events below the root's
-  children and drops them. Consumers link `-framework CoreServices`.
+  children and drops them. `watch()` waits for the FSEvents service to flush its pending events, which it drops.
+  Consumers link `-framework CoreServices`.
 - FAT and exFAT identify an entry by its position in its directory, so a root replaced under the same name may go
   unrecognized there.
 
