@@ -97,6 +97,7 @@ struct directory_watcher::impl {
 	bool recursive = true;
 	std::vector<native_string> excludedDirectories;
 	std::optional<entry_identity> rootId;
+	std::string mountPoint; // Of the root's volume; empty when unknown
 	watch_coverage coverage = watch_coverage::complete;
 	std::optional<watch_event> pendingStop;
 	bool stopDelivered = false;
@@ -183,8 +184,14 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 		return std::unexpected{ capture_last_filesystem_error() };
 
 	struct statfs volume{};
-	if (::statfs(resolvedRoot.c_str(), &volume) != 0 || (volume.f_flags & MNT_LOCAL) == 0)
+	if (::statfs(resolvedRoot.c_str(), &volume) != 0)
 		coverage = watch_coverage::partial;
+	else
+	{
+		mountPoint = volume.f_mntonname;
+		if ((volume.f_flags & MNT_LOCAL) == 0)
+			coverage = watch_coverage::partial;
+	}
 
 	CFStringRef watchedPath = ::CFStringCreateWithFileSystemRepresentation(nullptr, resolvedRoot.c_str());
 	if (watchedPath == nullptr) [[unlikely]]
@@ -403,7 +410,13 @@ std::optional<stop_reason> directory_watcher::impl::rootLossReason() const
 {
 	const auto metadata = get_entry_metadata(root.c_str(), link_behavior::follow);
 	if (!metadata)
-		return stop_reason::root_lost;
+	{
+		// An unmount removes the root path too: a mount point no longer holding the root's volume tells it from a deletion.
+		struct stat mounted{};
+		const bool unmounted = rootId && !mountPoint.empty()
+			&& (::stat(mountPoint.c_str(), &mounted) != 0 || static_cast<filesystem_identity>(mounted.st_dev) != rootId->filesystem);
+		return unmounted ? stop_reason::volume_released : stop_reason::root_lost;
+	}
 	if (!rootId || !metadata->identity || *metadata->identity != *rootId)
 		return stop_reason::root_replaced;
 	return {};

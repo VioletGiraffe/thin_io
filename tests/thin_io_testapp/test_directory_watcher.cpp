@@ -484,6 +484,24 @@ TEST_CASE("POSIX: the watched root's parent or grandparent being moved stops the
 		CHECK(stop->reason == stop_reason::root_lost);
 	}
 }
+
+// Unmounts a volume: CI runs it alone, after the other tests. THIN_IO_UNMOUNT_DIRECTORY names a directory on the volume,
+// THIN_IO_UNMOUNT_COMMAND unmounts it, and fails while the volume is busy.
+TEST_CASE("POSIX: unmounting the volume stops the watch with volume_released", "[.][watcher][unmount]")
+{
+	const char* const directory = std::getenv("THIN_IO_UNMOUNT_DIRECTORY");
+	const char* const command = std::getenv("THIN_IO_UNMOUNT_COMMAND");
+	REQUIRE(directory != nullptr);
+	REQUIRE(command != nullptr);
+	directory_watcher watcher = watchTree(directory, { .recursive = false });
+
+	// Unmounting succeeds only if the watch holds nothing open on the volume.
+	REQUIRE(std::system(command) == 0);
+	const auto events = readUntil(watcher, [](const std::vector<watch_event>& read) { return stopEvent(read) != nullptr; });
+	const watch_event* const stop = stopEvent(events);
+	REQUIRE(stop);
+	CHECK(stop->reason == stop_reason::volume_released);
+}
 #endif
 
 TEST_CASE("A directory changing beside the root does not stop the watch", "[watcher][root]")

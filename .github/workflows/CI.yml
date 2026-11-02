@@ -106,3 +106,22 @@ jobs:
     - name: Test
       if: runner.os != 'Windows'
       run: scripts/run_tests.sh nobuild $TEST_DIRECTORIES
+
+    # Last: it unmounts the FAT32 volume. The command fails while the volume is busy, as a watch must not keep it.
+    - name: Unmount test - macOS
+      if: runner.os == 'macOS'
+      env:
+        THIN_IO_UNMOUNT_DIRECTORY: /Volumes/TIOFAT32/unmount-test
+        THIN_IO_UNMOUNT_COMMAND: hdiutil detach /Volumes/TIOFAT32
+      run: |
+        mkdir "$THIN_IO_UNMOUNT_DIRECTORY"
+        build/bin/tests "[unmount]"
+
+    - name: Unmount test - Linux
+      if: runner.os == 'Linux'
+      env:
+        THIN_IO_UNMOUNT_DIRECTORY: /mnt/tio-fat32/unmount-test
+        THIN_IO_UNMOUNT_COMMAND: sudo umount /mnt/tio-fat32
+      run: |
+        mkdir "$THIN_IO_UNMOUNT_DIRECTORY"
+        build/bin/tests "[unmount]"
