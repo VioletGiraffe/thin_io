@@ -72,19 +72,31 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         set -e
-        # The runner's kernel image ships without the exfat driver; it is in the extra modules package.
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends exfatprogs dosfstools "linux-modules-extra-$(uname -r)"
-        sudo modprobe exfat
-        truncate -s 128M "$RUNNER_TEMP/exfat.img" "$RUNNER_TEMP/fat32.img"
-        mkfs.exfat "$RUNNER_TEMP/exfat.img"
-        mkfs.vfat -F 32 "$RUNNER_TEMP/fat32.img"
-        sudo mkdir -p /mnt/tio-exfat /mnt/tio-fat32
-        # The type is explicit so that a kernel without the driver fails here, not through a FUSE fallback.
         # uid and gid: these filesystems store no owner, and the tests run unprivileged.
-        sudo mount -t exfat -o "loop,uid=$(id -u),gid=$(id -g)" "$RUNNER_TEMP/exfat.img" /mnt/tio-exfat
-        sudo mount -t vfat -o "loop,uid=$(id -u),gid=$(id -g)" "$RUNNER_TEMP/fat32.img" /mnt/tio-fat32
-        echo "TEST_DIRECTORIES=/mnt/tio-exfat /mnt/tio-fat32" >> $GITHUB_ENV
+        mount_options="loop,uid=$(id -u),gid=$(id -g)"
+        directories=
+        # The runner's kernel image ships without the exfat driver; it is in the extra modules package.
+        # A new runner kernel can precede its extra modules package in the archive: exFAT is skipped until it lands.
+        extra_modules="linux-modules-extra-$(uname -r)"
+        if apt-cache show "$extra_modules" > /dev/null 2>&1; then
+          sudo apt-get install -y --no-install-recommends exfatprogs "$extra_modules"
+          sudo modprobe exfat
+          truncate -s 128M "$RUNNER_TEMP/exfat.img"
+          mkfs.exfat "$RUNNER_TEMP/exfat.img"
+          sudo mkdir -p /mnt/tio-exfat
+          # The type is explicit so that a kernel without the driver fails here, not through a FUSE fallback.
+          sudo mount -t exfat -o "$mount_options" "$RUNNER_TEMP/exfat.img" /mnt/tio-exfat
+          directories=/mnt/tio-exfat
+        else
+          echo "::warning title=exFAT tests skipped::$extra_modules is not in the package archive"
+        fi
+        sudo apt-get install -y --no-install-recommends dosfstools
+        truncate -s 128M "$RUNNER_TEMP/fat32.img"
+        mkfs.vfat -F 32 "$RUNNER_TEMP/fat32.img"
+        sudo mkdir -p /mnt/tio-fat32
+        sudo mount -t vfat -o "$mount_options" "$RUNNER_TEMP/fat32.img" /mnt/tio-fat32
+        echo "TEST_DIRECTORIES=$directories /mnt/tio-fat32" >> $GITHUB_ENV
 
     - name: Test
       if: runner.os == 'Windows'

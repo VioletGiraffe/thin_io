@@ -763,7 +763,8 @@ TEST_CASE("a file open for reading can be renamed and deleted", "[file]")
 
 	file fr;
 	REQUIRE(fr.open(testFilePath, file::access_mode::Read));
-	REQUIRE(rename_entry(testFilePath, renamedFilePath, existing_destination::fail));
+	// replace: the destination is gone already, and macOS exFAT has no exclusive rename
+	REQUIRE(rename_entry(testFilePath, renamedFilePath, existing_destination::replace));
 	REQUIRE(file::delete_file(renamedFilePath));
 
 	char buf[sizeof(testString)] = { 0 };
