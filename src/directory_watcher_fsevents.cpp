@@ -59,7 +59,7 @@ void onStreamEvents(ConstFSEventStreamRef, void* context, size_t count, void* pa
 
 } // namespace
 
-// The stream's callback runs on a private dispatch queue; everything else runs on the caller's thread.
+// The stream's callback and the revoke handler run on a private dispatch queue; everything else runs on the caller's thread.
 struct directory_watcher::impl {
 	impl() = default;
 	~impl();
@@ -78,7 +78,7 @@ struct directory_watcher::impl {
 	[[nodiscard]] std::optional<stop_reason> rootLossReason() const;
 	void stopWatch(stop_reason reason, filesystem_error error) noexcept;
 	// Never called from the queue: it waits for the queue to finish a running callback.
-	void tearDownStream() noexcept;
+	void tearDownNotifications() noexcept;
 	void signal() noexcept;
 
 	// Shared with the callback
@@ -90,6 +90,11 @@ struct directory_watcher::impl {
 	int signalWriteFd = -1;
 	FSEventStreamRef stream = nullptr;
 	dispatch_queue_t queue = nullptr;
+	// The root's own volume going away reaches no stream: the kernel revokes the root's vnode instead.
+	// O_EVTONLY: the descriptor never keeps the volume busy.
+	int rootFd = -1;
+	dispatch_source_t revokeSource = nullptr;
+	dispatch_semaphore_t revokeCancelled = nullptr; // The cancel handler signals it: rootFd stays open until then
 
 	std::string root; // Absolute, as given: the root's identity is checked through it
 	// The spellings the stream may report the root under: as given, resolved, and as the volume stores it
@@ -125,11 +130,19 @@ void onStreamEvents(ConstFSEventStreamRef, void* const context, const size_t cou
 	watcher.signal();
 }
 
+void onRootRevoked(void* const context) noexcept
+{
+	auto& watcher = *static_cast<directory_watcher::impl*>(context);
+	std::lock_guard lock{ watcher.mutex };
+	watcher.received.push_back(stream_event{ .flags = kFSEventStreamEventFlagUnmount });
+	watcher.signal();
+}
+
 } // namespace
 
 directory_watcher::impl::~impl()
 {
-	tearDownStream();
+	tearDownNotifications();
 	if (signalReadFd >= 0)
 		::close(signalReadFd);
 	if (signalWriteFd >= 0)
@@ -167,12 +180,12 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 	::free(resolved);
 
 	rootSpellings = { root, resolvedRoot };
-	if (const int rootFd = ::open(resolvedRoot.c_str(), O_EVTONLY | O_CLOEXEC); rootFd >= 0)
+	rootFd = ::open(resolvedRoot.c_str(), O_EVTONLY | O_CLOEXEC);
+	if (rootFd >= 0)
 	{
 		char stored[MAXPATHLEN]{};
 		if (::fcntl(rootFd, F_GETPATH, stored) == 0)
 			rootSpellings.emplace_back(stored);
-		::close(rootFd);
 	}
 
 	int ends[2]{ -1, -1 };
@@ -211,6 +224,20 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 		return std::unexpected{ filesystem_error{ .native_code = EINVAL } };
 
 	queue = ::dispatch_queue_create("thin_io.directory_watcher", DISPATCH_QUEUE_SERIAL);
+	if (rootFd >= 0)
+	{
+		revokeSource = ::dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, static_cast<uintptr_t>(rootFd), DISPATCH_VNODE_REVOKE, queue);
+		if (revokeSource == nullptr) [[unlikely]]
+			return std::unexpected{ filesystem_error{ .native_code = ENOMEM } };
+
+		revokeCancelled = ::dispatch_semaphore_create(0);
+		::dispatch_set_context(revokeSource, this);
+		::dispatch_source_set_event_handler_f(revokeSource, onRootRevoked);
+		::dispatch_source_set_cancel_handler_f(revokeSource, [](void* const context) {
+			::dispatch_semaphore_signal(static_cast<impl*>(context)->revokeCancelled);
+		});
+		::dispatch_resume(revokeSource);
+	}
 	::FSEventStreamSetDispatchQueue(stream, queue);
 	if (!::FSEventStreamStart(stream)) [[unlikely]]
 		return std::unexpected{ filesystem_error{ .native_code = EIO } };
@@ -221,8 +248,26 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 	return {};
 }
 
-void directory_watcher::impl::tearDownStream() noexcept
+void directory_watcher::impl::tearDownNotifications() noexcept
 {
+	if (revokeSource != nullptr)
+	{
+		::dispatch_source_cancel(revokeSource);
+		::dispatch_semaphore_wait(revokeCancelled, DISPATCH_TIME_FOREVER);
+		::dispatch_release(revokeSource);
+		revokeSource = nullptr;
+	}
+	if (revokeCancelled != nullptr)
+	{
+		::dispatch_release(revokeCancelled);
+		revokeCancelled = nullptr;
+	}
+	if (rootFd >= 0)
+	{
+		::close(rootFd);
+		rootFd = -1;
+	}
+
 	if (stream != nullptr)
 	{
 		::FSEventStreamStop(stream);
@@ -427,7 +472,7 @@ void directory_watcher::impl::stopWatch(const stop_reason reason, const filesyst
 	if (pendingStop || stopDelivered)
 		return;
 
-	tearDownStream();
+	tearDownNotifications();
 	pendingStop = watch_event{ .kind = watch_event_kind::stopped, .reason = reason, .error = error };
 	std::lock_guard lock{ mutex };
 	signal(); // A waiter wakes for the stop
