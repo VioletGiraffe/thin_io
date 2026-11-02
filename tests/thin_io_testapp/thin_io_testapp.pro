@@ -83,6 +83,7 @@ Debug:LIB_PATH += $${PWD}/../../../bin/debug
 Release:LIB_PATH += $${PWD}/../../../bin/release
 
 LIBS += -L$${LIB_PATH} -lthin_io
+mac*:LIBS += -framework CoreServices # FSEvents, for directory_watcher
 
 mac*|linux*|freebsd*{
 	PRE_TARGETDEPS += $${LIB_PATH}/libthin_io.a
@@ -105,7 +106,7 @@ SOURCES += \
 	test_filesystem_types.cpp \
 	test_fs.cpp
 
-win*|linux*:SOURCES += test_directory_watcher.cpp
+win*|linux*|mac*:SOURCES += test_directory_watcher.cpp
 
 win*:SOURCES += \
 	test_file_win.cpp \

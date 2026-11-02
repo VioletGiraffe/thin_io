@@ -71,8 +71,13 @@ else()
 endif()
 
 # Named by mechanism, not *_linux: that glob builds macOS too
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+	list(APPEND PLATFORM_FILES src/directory_watcher_posix.cpp src/directory_watcher_posix.hpp)
+endif()
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	list(APPEND PLATFORM_FILES src/directory_watcher_inotify.cpp)
+elseif (APPLE)
+	list(APPEND PLATFORM_FILES src/directory_watcher_fsevents.cpp)
 endif()
 
 add_library(${TARGET_NAME} STATIC
@@ -96,6 +101,11 @@ target_include_directories(${TARGET_NAME} PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src $
 
 # PUBLIC: the headers require C++23 (std::expected, std::to_underlying)
 target_compile_features(${TARGET_NAME} PUBLIC cxx_std_23)
+
+# FSEvents, for directory_watcher
+if (APPLE)
+	target_link_libraries(${TARGET_NAME} PUBLIC "-framework CoreServices")
+endif()
 # CONFIG += strict_c++ in the .pro
 set_target_properties(${TARGET_NAME} PROPERTIES CXX_EXTENSIONS OFF)
 

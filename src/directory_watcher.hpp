@@ -134,9 +134,16 @@ public:
 	void signal() noexcept;
 
 private:
+#ifdef _WIN32
 	explicit waker(native_wait_handle handle) noexcept;
+#else
+	waker(native_wait_handle readEnd, int writeEnd) noexcept;
+#endif
 
-	native_wait_handle _handle;
+	native_wait_handle _handle; // What wait_for_any() waits on: on POSIX, the read end of a pipe
+#ifndef _WIN32
+	int _writeEnd = -1;
+#endif
 
 	friend filesystem_result<wait_result> wait_for_any(std::span<directory_watcher* const> watchers, waker* wakeUp,
 		std::chrono::milliseconds timeout);

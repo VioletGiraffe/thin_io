@@ -1,12 +1,10 @@
 #include "directory_watcher.hpp"
+#include "directory_watcher_posix.hpp"
 #include "fs.hpp"
 
 #include <errno.h>
-#include <limits.h>
-#include <poll.h>
 #include <stdlib.h> // realpath
 #include <string.h>
-#include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/vfs.h> // statfs
 #include <unistd.h>
@@ -26,13 +24,6 @@ namespace {
 
 constexpr uint32_t treeMask = IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY | IN_ATTRIB | IN_EXCL_UNLINK | IN_ONLYDIR;
 constexpr uint32_t selfMask = IN_DELETE_SELF | IN_MOVE_SELF;
-
-[[nodiscard]] int pollMilliseconds(const std::chrono::milliseconds timeout) noexcept
-{
-	if (timeout.count() < 0)
-		return -1;
-	return static_cast<int>(std::min<std::chrono::milliseconds::rep>(timeout.count(), INT_MAX));
-}
 
 // statfs magic numbers: NFS, SMB, SMB2, CIFS, FUSE (WSL's and others' virtual drives), 9P
 [[nodiscard]] bool isRemoteOrVirtual(const char* const path) noexcept
@@ -55,37 +46,6 @@ constexpr uint32_t selfMask = IN_DELETE_SELF | IN_MOVE_SELF;
 	}
 }
 
-[[nodiscard]] std::string joined(const std::string_view directory, const std::string_view name)
-{
-	if (directory.empty())
-		return std::string{ name };
-	std::string path{ directory };
-	if (!path.ends_with('/'))
-		path += '/';
-	path += name;
-	return path;
-}
-
-[[nodiscard]] bool isSameOrUnder(const std::string_view path, const std::string_view directory) noexcept
-{
-	return path.starts_with(directory) && (path.size() == directory.size() || path[directory.size()] == '/');
-}
-
-[[nodiscard]] bool isUnder(const std::string_view path, const std::string_view directory) noexcept
-{
-	return !directory.empty() && path.size() > directory.size() && isSameOrUnder(path, directory);
-}
-
-[[nodiscard]] std::vector<native_string> normalizedRelativeDirectories(std::vector<native_string> directories)
-{
-	for (native_string& directory : directories)
-	{
-		while (directory.ends_with('/'))
-			directory.pop_back();
-	}
-	return directories;
-}
-
 } // namespace
 
 struct directory_watcher::impl {
@@ -104,11 +64,10 @@ struct directory_watcher::impl {
 	[[nodiscard]] filesystem_result<void> watchSubtree(const std::string& relativeDirectory, std::vector<watch_event>* events);
 	void unwatchSubtree(std::string_view relativeDirectory) noexcept;
 	void moveWatchedPaths(std::string_view from, std::string_view to);
-	[[nodiscard]] bool isExcluded(std::string_view relativePath) const noexcept;
-	void appendUnlessExcluded(watch_event event, std::vector<watch_event>* events) const;
+	// events: null when discarding
+	void emit(watch_event event, std::vector<watch_event>* events) const;
 	[[nodiscard]] std::optional<stop_reason> rootLossReason() const;
 	void stopWatch(stop_reason reason, filesystem_error error) noexcept;
-	void discardQueue() noexcept;
 
 	int inotifyFd = -1;
 	std::string root; // Absolute, as given: the root's identity is checked through it
@@ -150,7 +109,7 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 		char* const currentDirectory = ::getcwd(nullptr, 0);
 		if (currentDirectory == nullptr) [[unlikely]]
 			return std::unexpected{ capture_last_filesystem_error() };
-		root = joined(currentDirectory, root);
+		root = joinedPath(currentDirectory, root);
 		::free(currentDirectory);
 	}
 	while (root.size() > 1 && root.ends_with('/'))
@@ -208,7 +167,7 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 
 filesystem_result<void> directory_watcher::impl::watchSubtree(const std::string& relativeDirectory, std::vector<watch_event>* const events)
 {
-	const std::string absoluteDirectory = joined(realRoot, relativeDirectory);
+	const std::string absoluteDirectory = joinedPath(realRoot, relativeDirectory);
 	if (!relativeDirectory.empty())
 	{
 		const int descriptor = ::inotify_add_watch(inotifyFd, absoluteDirectory.c_str(), treeMask);
@@ -235,12 +194,11 @@ filesystem_result<void> directory_watcher::impl::watchSubtree(const std::string&
 
 	for (const directory_entry& entry : *entries)
 	{
-		const std::string path = joined(relativeDirectory, entry.name);
+		const std::string path = joinedPath(relativeDirectory, entry.name);
 		const bool isDirectory = entry.attributes.kind == entry_kind::directory && !entry.attributes.is_link;
-		if (events != nullptr)
-			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::created, .entry = entry.attributes.kind, .path = path }, events);
+		emit(watch_event{ .kind = watch_event_kind::created, .entry = entry.attributes.kind, .path = path }, events);
 
-		if (isDirectory && !isExcluded(path))
+		if (isDirectory && !isExcluded(path, excludedDirectories))
 		{
 			if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
 				return placed;
@@ -269,57 +227,17 @@ void directory_watcher::impl::moveWatchedPaths(const std::string_view from, cons
 	}
 }
 
-bool directory_watcher::impl::isExcluded(const std::string_view relativePath) const noexcept
+void directory_watcher::impl::emit(watch_event event, std::vector<watch_event>* const events) const
 {
-	return std::ranges::any_of(excludedDirectories, [relativePath](const native_string& directory) {
-		return !directory.empty() && isSameOrUnder(relativePath, directory);
-	});
-}
-
-// A rename across an excluded directory's boundary is a creation or a removal.
-// An excluded directory's own modification is dropped, as on every platform.
-void directory_watcher::impl::appendUnlessExcluded(watch_event event, std::vector<watch_event>* const events) const
-{
-	if (events == nullptr)
-		return;
-
-	const auto under = [this](const std::string_view path) {
-		return std::ranges::any_of(excludedDirectories, [path](const native_string& directory) { return isUnder(path, directory); });
-	};
-
-	if ((event.kind == watch_event_kind::modified || event.kind == watch_event_kind::metadata_changed)
-		&& std::ranges::find(excludedDirectories, event.path) != excludedDirectories.end())
-		return;
-
-	const bool pathExcluded = under(event.path);
-	if (event.kind == watch_event_kind::renamed)
-	{
-		const bool oldPathExcluded = under(event.old_path);
-		if (pathExcluded && oldPathExcluded)
-			return;
-		if (oldPathExcluded)
-		{
-			event.kind = watch_event_kind::created;
-			event.old_path.clear();
-		}
-		else if (pathExcluded)
-		{
-			event.kind = watch_event_kind::removed;
-			event.path = std::move(event.old_path);
-			event.old_path.clear();
-		}
-	}
-	else if (pathExcluded)
-		return;
-
-	events->push_back(std::move(event));
+	if (events != nullptr)
+		appendUnlessExcluded(std::move(event), excludedDirectories, *events);
 }
 
 std::optional<watch_event> directory_watcher::impl::drain(std::vector<watch_event>* const events, bool& any)
 {
 	if (stopDelivered)
 	{
-		discardQueue();
+		drainDescriptor(inotifyFd);
 		return {};
 	}
 
@@ -343,7 +261,7 @@ std::optional<watch_event> directory_watcher::impl::drain(std::vector<watch_even
 		return {};
 
 	// Removing the watches queued an IN_IGNORED for each: read out, the descriptor stays quiet from here on.
-	discardQueue();
+	drainDescriptor(inotifyFd);
 	any = true;
 	stopDelivered = true;
 	return std::exchange(pendingStop, std::nullopt);
@@ -360,7 +278,7 @@ void directory_watcher::impl::processBuffer(const size_t bytes, std::vector<watc
 		if ((nativeEvent.mask & IN_Q_OVERFLOW) != 0)
 		{
 			flushMoveSource(events);
-			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::overflow }, events);
+			emit(watch_event{ .kind = watch_event_kind::overflow }, events);
 			// Directories made during the overflow have no watch yet
 			if (recursive)
 			{
@@ -409,7 +327,7 @@ void directory_watcher::impl::processTreeEvent(const inotify_event& nativeEvent,
 	if (watched == treeWatches.end() || nativeEvent.len == 0)
 		return;
 
-	const std::string path = joined(watched->second, std::string_view{ nativeEvent.name, ::strnlen(nativeEvent.name, nativeEvent.len) });
+	const std::string path = joinedPath(watched->second, std::string_view{ nativeEvent.name, ::strnlen(nativeEvent.name, nativeEvent.len) });
 	const bool isDirectory = (nativeEvent.mask & IN_ISDIR) != 0;
 	const entry_kind kind = isDirectory ? entry_kind::directory : entry_kind::unknown;
 
@@ -419,15 +337,15 @@ void directory_watcher::impl::processTreeEvent(const inotify_event& nativeEvent,
 		if (isDirectory)
 		{
 			moveWatchedPaths(source.path, path);
-			if (isExcluded(path))
+			if (isExcluded(path, excludedDirectories))
 				unwatchSubtree(path);
-			else if (recursive && isExcluded(source.path))
+			else if (recursive && isExcluded(source.path, excludedDirectories))
 			{
 				if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
 					stopWatch(stop_reason::failed, placed.error());
 			}
 		}
-		appendUnlessExcluded(watch_event{ .kind = watch_event_kind::renamed, .entry = kind, .path = path, .old_path = source.path }, events);
+		emit(watch_event{ .kind = watch_event_kind::renamed, .entry = kind, .path = path, .old_path = source.path }, events);
 		return;
 	}
 
@@ -441,19 +359,19 @@ void directory_watcher::impl::processTreeEvent(const inotify_event& nativeEvent,
 
 	if ((nativeEvent.mask & (IN_CREATE | IN_MOVED_TO)) != 0)
 	{
-		appendUnlessExcluded(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = path }, events);
-		if (isDirectory && recursive && !isExcluded(path))
+		emit(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = path }, events);
+		if (isDirectory && recursive && !isExcluded(path, excludedDirectories))
 		{
 			if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
 				stopWatch(stop_reason::failed, placed.error());
 		}
 	}
 	else if ((nativeEvent.mask & IN_DELETE) != 0)
-		appendUnlessExcluded(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = path }, events);
+		emit(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = path }, events);
 	else if ((nativeEvent.mask & IN_MODIFY) != 0)
-		appendUnlessExcluded(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = path }, events);
+		emit(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = path }, events);
 	else if ((nativeEvent.mask & IN_ATTRIB) != 0)
-		appendUnlessExcluded(watch_event{ .kind = watch_event_kind::metadata_changed, .entry = kind, .path = path }, events);
+		emit(watch_event{ .kind = watch_event_kind::metadata_changed, .entry = kind, .path = path }, events);
 }
 
 // An IN_MOVED_FROM without its IN_MOVED_TO moved out of the tree.
@@ -465,7 +383,7 @@ void directory_watcher::impl::flushMoveSource(std::vector<watch_event>* const ev
 	const move_source source = *std::exchange(moveSource, std::nullopt);
 	if (source.isDirectory)
 		unwatchSubtree(source.path);
-	appendUnlessExcluded(watch_event{ .kind = watch_event_kind::removed,
+	emit(watch_event{ .kind = watch_event_kind::removed,
 		.entry = source.isDirectory ? entry_kind::directory : entry_kind::unknown, .path = source.path }, events);
 }
 
@@ -495,13 +413,6 @@ void directory_watcher::impl::stopWatch(const stop_reason reason, const filesyst
 	ancestorWatches.clear();
 	rootWatch = -1;
 	moveSource.reset();
-}
-
-void directory_watcher::impl::discardQueue() noexcept
-{
-	while (::read(inotifyFd, buffer.data(), buffer.size()) > 0 || errno == EINTR)
-	{
-	}
 }
 
 filesystem_result<directory_watcher> directory_watcher::watch(const char* const root, watch_options options)
@@ -552,15 +463,7 @@ filesystem_result<bool> directory_watcher::wait_for_events(const std::chrono::mi
 	if (!_impl) [[unlikely]]
 		return std::unexpected{ filesystem_error{ .native_code = EBADF } };
 
-	pollfd descriptor{ .fd = _impl->inotifyFd, .events = POLLIN, .revents = 0 };
-	for (;;)
-	{
-		const int ready = ::poll(&descriptor, 1, pollMilliseconds(timeout));
-		if (ready >= 0)
-			return ready > 0;
-		if (errno != EINTR) [[unlikely]]
-			return std::unexpected{ capture_last_filesystem_error() };
-	}
+	return waitUntilReadable(_impl->inotifyFd, timeout);
 }
 
 watch_coverage directory_watcher::coverage() const noexcept
@@ -583,7 +486,7 @@ void directory_watcher::set_excluded_directories(std::vector<native_string> dire
 	// A directory leaving the list gets its watches back, and reports nothing for what it already holds.
 	for (const native_string& directory : previous)
 	{
-		if (!directory.empty() && !watcher.isExcluded(directory))
+		if (!directory.empty() && !isExcluded(directory, watcher.excludedDirectories))
 		{
 			if (auto placed = watcher.watchSubtree(directory, nullptr); !placed) [[unlikely]]
 				watcher.stopWatch(stop_reason::failed, placed.error());
@@ -595,83 +498,6 @@ void directory_watcher::release() noexcept
 {
 	if (_impl)
 		_impl->stopWatch(stop_reason::volume_released, {});
-}
-
-filesystem_result<waker> waker::create()
-{
-	const int descriptor = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-	if (descriptor < 0) [[unlikely]]
-		return std::unexpected{ capture_last_filesystem_error() };
-	return waker{ descriptor };
-}
-
-waker::waker(const native_wait_handle handle) noexcept : _handle{ handle } {}
-
-waker::waker(waker&& other) noexcept : _handle{ std::exchange(other._handle, -1) } {}
-
-waker& waker::operator=(waker&& other) noexcept
-{
-	if (this != &other)
-	{
-		if (_handle >= 0)
-			::close(_handle);
-		_handle = std::exchange(other._handle, -1);
-	}
-	return *this;
-}
-
-waker::~waker()
-{
-	if (_handle >= 0)
-		::close(_handle);
-}
-
-void waker::signal() noexcept
-{
-	if (_handle >= 0)
-	{
-		const uint64_t one = 1;
-		(void)!::write(_handle, &one, sizeof(one));
-	}
-}
-
-filesystem_result<wait_result> wait_for_any(const std::span<directory_watcher* const> watchers, waker* const wakeUp,
-	const std::chrono::milliseconds timeout)
-{
-	std::vector<pollfd> descriptors;
-	descriptors.reserve(watchers.size() + 1);
-	if (wakeUp != nullptr)
-		descriptors.push_back(pollfd{ .fd = wakeUp->_handle, .events = POLLIN, .revents = 0 });
-	for (directory_watcher* const watcher : watchers)
-		descriptors.push_back(pollfd{ .fd = watcher != nullptr ? watcher->wait_handle() : -1, .events = POLLIN, .revents = 0 });
-
-	if (descriptors.empty() || std::ranges::any_of(descriptors, [](const pollfd& descriptor) { return descriptor.fd < 0; })) [[unlikely]]
-		return std::unexpected{ filesystem_error{ .native_code = EINVAL } };
-
-	int ready = 0;
-	while ((ready = ::poll(descriptors.data(), descriptors.size(), pollMilliseconds(timeout))) < 0)
-	{
-		if (errno != EINTR) [[unlikely]]
-			return std::unexpected{ capture_last_filesystem_error() };
-	}
-
-	wait_result result;
-	if (ready == 0)
-		return result;
-
-	const size_t firstWatcher = wakeUp != nullptr ? 1 : 0;
-	if (wakeUp != nullptr && (descriptors.front().revents & POLLIN) != 0)
-	{
-		uint64_t signals = 0;
-		(void)!::read(wakeUp->_handle, &signals, sizeof(signals)); // Consumes every signal: they coalesce
-		result.woken = true;
-	}
-	for (size_t i = 0; i < watchers.size(); ++i)
-	{
-		if ((descriptors[firstWatcher + i].revents & POLLIN) != 0)
-			result.ready.push_back(watchers[i]);
-	}
-	return result;
 }
 
 } // namespace thin_io

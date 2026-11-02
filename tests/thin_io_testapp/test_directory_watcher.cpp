@@ -431,8 +431,8 @@ TEST_CASE("Windows: removing the drive stops the watch with volume_released", "[
 }
 #endif
 
-#ifdef __linux__
-TEST_CASE("Linux: the watched root's parent or grandparent being moved stops the watch with root_lost", "[watcher][root]")
+#ifndef _WIN32
+TEST_CASE("POSIX: the watched root's parent or grandparent being moved stops the watch with root_lost", "[watcher][root]")
 {
 	scratch_tree tree{ "watcher-ancestor-moved" };
 	REQUIRE(create_directory(tree.path("parent").c_str()));

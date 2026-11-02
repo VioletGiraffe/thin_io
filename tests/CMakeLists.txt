@@ -20,7 +20,7 @@ add_executable(${TARGET_NAME}
 	thin_io_testapp/test_fs.cpp
 )
 
-if (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
 	target_sources(${TARGET_NAME} PRIVATE thin_io_testapp/test_directory_watcher.cpp)
 endif()
 

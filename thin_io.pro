@@ -94,7 +94,12 @@ win*{
 }
 
 # Named by mechanism, not *_linux: that glob builds macOS too
+linux*|mac* {
+	HEADERS += src/directory_watcher_posix.hpp
+	SOURCES += src/directory_watcher_posix.cpp
+}
 linux*:SOURCES += src/directory_watcher_inotify.cpp
+mac*:SOURCES += src/directory_watcher_fsevents.cpp
 
 win*{
 	DEFINES += WIN32_LEAN_AND_MEAN NOMINMAX
