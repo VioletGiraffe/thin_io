@@ -184,7 +184,7 @@ filesystem_result<wait_result> wait_for_any(const std::span<directory_watcher* c
 		return std::unexpected{ filesystem_error{ .native_code = EINVAL } };
 
 	int ready = 0;
-	while ((ready = ::poll(polled.data(), polled.size(), pollMilliseconds(timeout))) < 0)
+	while ((ready = ::poll(polled.data(), static_cast<nfds_t>(polled.size()), pollMilliseconds(timeout))) < 0)
 	{
 		if (errno != EINTR) [[unlikely]]
 			return std::unexpected{ capture_last_filesystem_error() };
