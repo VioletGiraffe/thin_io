@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -31,6 +32,7 @@ constexpr FSEventStreamEventFlags metadataFlags = kFSEventStreamEventFlagItemIno
 // One event as the stream reported it; interpreted later on the caller's thread
 struct stream_event {
 	std::string path; // Absolute
+	std::string relative; // To the root; empty for the root itself and for unmount, drop and RootChanged events
 	FSEventStreamEventFlags flags = 0;
 	FSEventStreamEventId id = 0;
 };
@@ -66,6 +68,8 @@ struct directory_watcher::impl {
 	impl& operator=(const impl&) = delete;
 
 	[[nodiscard]] filesystem_result<void> arm(const char* rootPath, watch_options options);
+	// Empty for an event that can produce no watch event. Runs on the queue: reads only what arm() set before the stream started.
+	[[nodiscard]] std::optional<stream_event> relevantEvent(const char* absolutePath, FSEventStreamEventFlags flags, FSEventStreamEventId id) const;
 	[[nodiscard]] std::optional<watch_event> drain(std::vector<watch_event>* events, bool& any);
 	void interpret(const std::vector<stream_event>& received, std::vector<watch_event>* events);
 	[[nodiscard]] std::optional<std::string> relativePath(std::string_view absolutePath) const;
@@ -106,9 +110,17 @@ void onStreamEvents(ConstFSEventStreamRef, void* const context, const size_t cou
 	auto& watcher = *static_cast<directory_watcher::impl*>(context);
 	const auto* const absolutePaths = static_cast<const char* const*>(paths);
 
-	std::lock_guard lock{ watcher.mutex };
+	std::vector<stream_event> relevant;
 	for (size_t i = 0; i < count; ++i)
-		watcher.received.push_back(stream_event{ .path = absolutePaths[i], .flags = flags[i], .id = ids[i] });
+	{
+		if (auto reported = watcher.relevantEvent(absolutePaths[i], flags[i], ids[i]))
+			relevant.push_back(std::move(*reported));
+	}
+	if (relevant.empty())
+		return;
+
+	std::lock_guard lock{ watcher.mutex };
+	watcher.received.insert(watcher.received.end(), std::make_move_iterator(relevant.begin()), std::make_move_iterator(relevant.end()));
 	watcher.signal();
 }
 
@@ -221,6 +233,30 @@ void directory_watcher::impl::tearDownStream() noexcept
 	}
 }
 
+std::optional<stream_event> directory_watcher::impl::relevantEvent(const char* const absolutePath, const FSEventStreamEventFlags flags,
+	const FSEventStreamEventId id) const
+{
+	stream_event reported{ .path = absolutePath, .flags = flags, .id = id };
+	if ((flags & (kFSEventStreamEventFlagUnmount | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped)) != 0)
+		return reported;
+	if ((flags & kFSEventStreamEventFlagRootChanged) != 0)
+	{
+		if (!rootLossReason())
+			return {};
+		return reported;
+	}
+
+	auto relative = relativePath(reported.path);
+	if (!relative || (!recursive && relative->find('/') != std::string::npos))
+		return {};
+	// The root's own changes are no entry events: its loss stops the watch through RootChanged.
+	if (relative->empty() && (flags & kFSEventStreamEventFlagMustScanSubDirs) == 0)
+		return {};
+
+	reported.relative = std::move(*relative);
+	return reported;
+}
+
 // Requires the mutex
 void directory_watcher::impl::signal() noexcept
 {
@@ -264,6 +300,7 @@ std::optional<watch_event> directory_watcher::impl::drain(std::vector<watch_even
 
 // FSEvents coalesces an entry's changes into one event and reports a rename as two events, the old name first, with
 // consecutive IDs and no other pairing: whether a path still exists tells the outcome.
+// The batch holds only events relevantEvent() kept.
 void directory_watcher::impl::interpret(const std::vector<stream_event>& batch, std::vector<watch_event>* const events)
 {
 	for (size_t i = 0; i < batch.size() && !pendingStop; ++i)
@@ -289,13 +326,10 @@ void directory_watcher::impl::interpret(const std::vector<stream_event>& batch, 
 			continue;
 		}
 
-		const auto relative = relativePath(reported.path);
-		if (!relative || (!recursive && relative->find('/') != std::string::npos))
-			continue;
-
+		const std::string& relative = reported.relative;
 		if ((flags & kFSEventStreamEventFlagMustScanSubDirs) != 0)
 		{
-			emit(watch_event{ .kind = watch_event_kind::overflow, .path = *relative }, events);
+			emit(watch_event{ .kind = watch_event_kind::overflow, .path = relative }, events);
 			continue;
 		}
 
@@ -303,7 +337,7 @@ void directory_watcher::impl::interpret(const std::vector<stream_event>& batch, 
 		const bool exists = pathExists(reported.path);
 		if ((flags & kFSEventStreamEventFlagItemRemoved) != 0 && !exists)
 		{
-			emit(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = *relative }, events);
+			emit(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = relative }, events);
 			continue;
 		}
 
@@ -312,30 +346,28 @@ void directory_watcher::impl::interpret(const std::vector<stream_event>& batch, 
 			if (!exists && i + 1 < batch.size())
 			{
 				const stream_event& next = batch[i + 1];
-				const auto nextRelative = relativePath(next.path);
-				if ((next.flags & kFSEventStreamEventFlagItemRenamed) != 0 && next.id == reported.id + 1 && nextRelative
-					&& (recursive || nextRelative->find('/') == std::string::npos) && pathExists(next.path))
+				if ((next.flags & kFSEventStreamEventFlagItemRenamed) != 0 && next.id == reported.id + 1 && !next.relative.empty() && pathExists(next.path))
 				{
-					emit(watch_event{ .kind = watch_event_kind::renamed, .entry = kindFromFlags(next.flags), .path = *nextRelative, .old_path = *relative }, events);
+					emit(watch_event{ .kind = watch_event_kind::renamed, .entry = kindFromFlags(next.flags), .path = next.relative, .old_path = relative }, events);
 					++i;
 					continue;
 				}
 			}
 
 			// Moved across the root's boundary, or reported unpaired
-			emit(watch_event{ .kind = exists ? watch_event_kind::created : watch_event_kind::removed, .entry = kind, .path = *relative }, events);
+			emit(watch_event{ .kind = exists ? watch_event_kind::created : watch_event_kind::removed, .entry = kind, .path = relative }, events);
 			if (!exists)
 				continue;
 		}
 		else if ((flags & kFSEventStreamEventFlagItemCreated) != 0 && exists)
-			emit(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = *relative }, events);
+			emit(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = relative }, events);
 
 		if (!exists)
 			continue;
 		if ((flags & kFSEventStreamEventFlagItemModified) != 0)
-			emit(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = *relative }, events);
+			emit(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = relative }, events);
 		if ((flags & metadataFlags) != 0)
-			emit(watch_event{ .kind = watch_event_kind::metadata_changed, .entry = kind, .path = *relative }, events);
+			emit(watch_event{ .kind = watch_event_kind::metadata_changed, .entry = kind, .path = relative }, events);
 	}
 }
 

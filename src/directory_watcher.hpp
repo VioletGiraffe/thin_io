@@ -66,8 +66,9 @@ struct discarded_events {
 // Watches one directory, or the subtree under it, for changes.
 // Not thread-safe: every call on one watcher comes from one thread at a time. It may be created on one thread and
 // used from another; it holds no thread-local state.
-// wait_handle() is level-triggered: signalled exactly while events are pending. read_events() and discard_events()
-// drain every pending event and leave it non-signalled.
+// wait_handle() is level-triggered: signalled while notifications are pending. read_events() and discard_events()
+// drain them all and leave it non-signalled.
+// A notification may produce no event, such as a change in an excluded directory, or on Windows a directory added, removed or renamed beside the root.
 // After the stopped event, no further events arrive and the watcher never re-arms itself: the caller re-arms by path.
 // A directory that appears is reported as created. Its entries may be reported too, one made as the directory appears
 // possibly twice: a caller that needs them lists the directory.
@@ -84,13 +85,13 @@ public:
 	directory_watcher& operator=(directory_watcher&&) noexcept;
 	~directory_watcher();
 
-	// Signalled while events are pending: an event HANDLE on Windows, a readable fd on POSIX.
+	// Signalled while notifications are pending: an event HANDLE on Windows, a readable fd on POSIX.
 	[[nodiscard]] native_wait_handle wait_handle() const noexcept;
 	// Never blocks; empty when nothing is pending.
 	[[nodiscard]] filesystem_result<std::vector<watch_event>> read_events();
-	// Drains the pending events without building them, and re-arms.
+	// Drains the pending notifications without building events, and re-arms.
 	[[nodiscard]] filesystem_result<discarded_events> discard_events();
-	// Blocks until events are pending or the timeout passes; a negative timeout waits indefinitely.
+	// Blocks until notifications are pending or the timeout passes; a negative timeout waits indefinitely.
 	[[nodiscard]] filesystem_result<bool> wait_for_events(std::chrono::milliseconds timeout);
 	[[nodiscard]] watch_coverage coverage() const noexcept;
 	// Takes effect for later changes; a directory leaving the list reports nothing for what it already holds.
@@ -109,12 +110,12 @@ private:
 
 struct wait_result {
 	bool woken = false;                    // The waker was signalled.
-	std::vector<directory_watcher*> ready; // Every watcher with events pending when the wait returned.
+	std::vector<directory_watcher*> ready; // Every watcher with notifications pending when the wait returned.
 };
 
 class waker;
 
-// Blocks until a watcher has events pending, the waker is signalled, or the timeout passes (an empty result).
+// Blocks until a watcher has notifications pending, the waker is signalled, or the timeout passes (an empty result).
 // wakeUp may be null. A negative timeout waits indefinitely.
 // The watchers belong to the waiting thread for the duration of the wait.
 // Windows: at most 64 handles, so 63 watchers with a waker, 64 without.
