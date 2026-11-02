@@ -68,9 +68,10 @@ TEST_CASE("directory_snapshot compares equal while nothing changes, and differs 
 	REQUIRE(remove_entry(secondFilePath));
 	CHECK(takeSnapshot() == initial);
 
-	REQUIRE(rename_entry(firstFilePath, secondFilePath, existing_destination::fail));
+	// replace: the destination is gone already, and macOS exFAT has no exclusive rename
+	REQUIRE(rename_entry(firstFilePath, secondFilePath, existing_destination::replace));
 	CHECK(takeSnapshot() != initial);
-	REQUIRE(rename_entry(secondFilePath, firstFilePath, existing_destination::fail));
+	REQUIRE(rename_entry(secondFilePath, firstFilePath, existing_destination::replace));
 
 	removeTestDirectory();
 }
