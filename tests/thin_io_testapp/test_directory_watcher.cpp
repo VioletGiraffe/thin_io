@@ -668,6 +668,33 @@ TEST_CASE("directory_watcher watches the root of a volume", "[watcher][root]")
 	(void)readUntilEvent(watcher, watch_event_kind::removed, "watcher-volume-root.txt");
 }
 
+#ifdef _WIN32
+// Watched through the administrative share of the working directory's drive, so over SMB through the loopback
+TEST_CASE("Windows: a network share is watched with complete coverage", "[watcher]")
+{
+	scratch_tree tree{ "watcher-network-share" };
+
+	wchar_t directory[MAX_PATH]{};
+	const DWORD length = ::GetCurrentDirectoryW(MAX_PATH, directory);
+	REQUIRE((length >= 3 && length < MAX_PATH && directory[1] == L':'));
+	std::wstring pathOnDrive{ directory + 2, length - 2 };
+	if (!pathOnDrive.ends_with(L'\\'))
+		pathOnDrive += L'\\';
+	const native_string share = std::wstring{ LR"(\\localhost\)" } + directory[0] + L'$' + pathOnDrive + tree.root();
+	if (::GetFileAttributesW(share.c_str()) == INVALID_FILE_ATTRIBUTES)
+	{
+		WARN("The working directory's drive has no administrative share: test skipped");
+		return;
+	}
+
+	directory_watcher watcher = watchTree(share, { .recursive = false });
+	CHECK(watcher.coverage() == watch_coverage::complete);
+
+	writeFile(tree.path("a.txt"), "one");
+	(void)readUntilEvent(watcher, watch_event_kind::created, "a.txt");
+}
+#endif
+
 #ifndef _WIN32
 TEST_CASE("POSIX: directory_watcher watches a root reached through a symbolic link", "[watcher][root]")
 {

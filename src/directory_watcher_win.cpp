@@ -101,18 +101,6 @@ constexpr DWORD rootFilter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_D
 	return path;
 }
 
-[[nodiscard]] watch_coverage coverageOf(const std::wstring& root)
-{
-	if (root.starts_with(LR"(\\?\UNC\)"))
-		return watch_coverage::partial;
-
-	std::wstring volume(root.size() + 2, L'\0'); // A volume path is never longer than a path on it, plus its trailing separator
-	if (::GetVolumePathNameW(root.c_str(), volume.data(), static_cast<DWORD>(volume.size())) == 0)
-		return watch_coverage::partial;
-
-	return ::GetDriveTypeW(volume.c_str()) == DRIVE_REMOTE ? watch_coverage::partial : watch_coverage::complete;
-}
-
 [[nodiscard]] std::vector<native_string> normalizedRelativeDirectories(std::vector<native_string> directories)
 {
 	for (native_string& directory : directories)
@@ -290,7 +278,8 @@ filesystem_result<void> directory_watcher::impl::arm(watch_options options)
 	if (parentSlot.completed())
 		::SetEvent(waitEvent);
 
-	coverage = rootTracked ? coverageOf(root) : watch_coverage::partial;
+	// A network share's notifications come from its server and include every client's changes.
+	coverage = rootTracked ? watch_coverage::complete : watch_coverage::partial;
 
 	// Last: the callback may run as soon as one registration exists, and close both handles.
 	// So both are read first; registering a handle it already closed fails, or reaches an already stopped watch.

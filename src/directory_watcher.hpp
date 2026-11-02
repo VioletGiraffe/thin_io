@@ -44,10 +44,16 @@ struct watch_event {
 	filesystem_error error{};               // stopped with failed only.
 };
 
-// A heuristic from the volume type: a server may never send notifications although the watch arms fine.
+// Whether the notifications report every change. A caller that must not miss changes polls where they may not.
+// partial:
+// - Linux, macOS: a network or virtual volume, whose notifications report only the changes this machine makes;
+// - Linux: a directory under the root, or an ancestor of it, that cannot be watched;
+// - Windows: a root whose parent cannot be watched, so the root's own rename goes unreported.
+// Windows: a network share counts as complete, its server reporting every client's changes; a server that accepts the
+// watch and never notifies is not detected.
 enum class watch_coverage : uint8_t {
-	complete, // A local volume.
-	partial   // A remote or virtual volume, or a root or ancestor that could not be watched: changes may go unreported.
+	complete,
+	partial
 };
 
 struct watch_options {

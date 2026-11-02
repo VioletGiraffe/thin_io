@@ -172,8 +172,10 @@ changed in metadata alone, and renamed, with paths relative to the root. Impleme
   itself: the caller watches the path again.
 - An open watch never blocks an eject: it releases its handles when the volume is locked for eject, dismounted or
   removed, and reports `stopped`.
-- `coverage()` is `partial` for remote volumes, where a server may never send notifications although the watch arms
-  fine. A caller that must not miss changes there polls with `directory_snapshot`
+- `coverage()` is `partial` where notifications may miss changes, such as a Linux or macOS network volume, which
+  reports only this machine's changes; `directory_watcher.hpp` lists every case. A Windows network share is `complete`:
+  its server reports every client's changes. A caller that must not miss changes polls a `partial` watch with
+  `directory_snapshot`
   ([`src/directory_snapshot.hpp`](src/directory_snapshot.hpp)): two snapshots of a directory compare unequal when an
   entry was added, removed or renamed, or changed in size, modification time, attributes or permissions.
 
