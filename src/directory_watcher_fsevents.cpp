@@ -242,19 +242,6 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 	if (!::FSEventStreamStart(stream)) [[unlikely]]
 		return std::unexpected{ filesystem_error{ .native_code = EIO } };
 
-	// FSEvents can report a change made before the stream started.
-	// The flush delivers every event that occurred so far, and they are dropped. Unmounts are kept: the volume is gone either way.
-	::FSEventStreamFlushSync(stream);
-	{
-		std::lock_guard lock{ mutex };
-		std::erase_if(received, [](const stream_event& event) { return (event.flags & kFSEventStreamEventFlagUnmount) == 0; });
-		if (received.empty())
-		{
-			drainDescriptor(signalReadFd);
-			signalled = false;
-		}
-	}
-
 	// A replacement before the stream started went unreported.
 	if (const auto reason = rootLossReason())
 		stopWatch(*reason, {});

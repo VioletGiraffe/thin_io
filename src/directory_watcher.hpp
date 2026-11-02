@@ -70,6 +70,7 @@ struct discarded_events {
 // drain them all and leave it non-signalled.
 // A notification may produce no event, such as a change in an excluded directory, or on Windows a directory added, removed or renamed beside the root.
 // A change made before watch() returns may go unreported: a caller that needs the root's contents lists it after the watch is made.
+// macOS: a change made shortly before watch() may be reported too: FSEvents can deliver it after the stream starts.
 // After the stopped event, no further events arrive and the watcher never re-arms itself: the caller re-arms by path.
 // A directory that appears is reported as created. Its entries may be reported too, one made as the directory appears
 // possibly twice: a caller that needs them lists the directory.
