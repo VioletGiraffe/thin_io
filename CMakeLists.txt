@@ -70,6 +70,11 @@ else()
 	file(GLOB PLATFORM_FILES CONFIGURE_DEPENDS src/*_linux.cpp src/*_linux.hpp)
 endif()
 
+# Named by mechanism, not *_linux: that glob builds macOS too
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	list(APPEND PLATFORM_FILES src/directory_watcher_inotify.cpp)
+endif()
+
 add_library(${TARGET_NAME} STATIC
 	src/buffered_reader.hpp
 	src/directory_snapshot.hpp

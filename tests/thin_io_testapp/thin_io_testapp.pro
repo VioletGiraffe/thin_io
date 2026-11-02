@@ -105,8 +105,9 @@ SOURCES += \
 	test_filesystem_types.cpp \
 	test_fs.cpp
 
+win*|linux*:SOURCES += test_directory_watcher.cpp
+
 win*:SOURCES += \
-	test_directory_watcher.cpp \
 	test_file_win.cpp \
 	test_windows_path.cpp
 

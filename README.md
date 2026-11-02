@@ -162,7 +162,7 @@ Windows filesystem exposes no volume serial number.
 ## Directory change watching
 
 `directory_watcher` watches one directory, or the subtree under it, and reports entries created, removed, modified,
-changed in metadata alone, and renamed, with paths relative to the root. Implemented on Windows so far.
+changed in metadata alone, and renamed, with paths relative to the root. Implemented on Windows and Linux so far.
 
 - thin_io starts no threads. The caller waits on `wait_handle()` (an event handle on Windows, an fd on POSIX) in its
   own event loop, or blocks in `wait_for_events()` or `wait_for_any()`.
@@ -181,6 +181,9 @@ Limits:
 
 - Windows: the root's parent and every further ancestor cannot be renamed while the watch is held.
 - Windows: one `wait_for_any()` call takes at most 64 handles: 63 watchers with a waker, 64 without.
+- Linux: every watched directory and every ancestor of a root takes a watch out of `fs.inotify.max_user_watches`, and
+  each watcher takes an inotify instance out of `fs.inotify.max_user_instances` (128 by default). Both limits are
+  shared by every process of the user.
 - FAT and exFAT identify an entry by its position in its directory, so a root replaced under the same name may go
   unrecognized there.
 

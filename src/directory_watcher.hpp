@@ -69,6 +69,8 @@ struct discarded_events {
 // wait_handle() is level-triggered: signalled exactly while events are pending. read_events() and discard_events()
 // drain every pending event and leave it non-signalled.
 // After the stopped event, no further events arrive and the watcher never re-arms itself: the caller re-arms by path.
+// A directory that appears is reported as created. Its entries may be reported too, one made as the directory appears
+// possibly twice: a caller that needs them lists the directory.
 // Windows: the root's parent and every further ancestor cannot be renamed while the watch is held.
 class directory_watcher {
 public:

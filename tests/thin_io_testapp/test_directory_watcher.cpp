@@ -192,7 +192,7 @@ TEST_CASE("directory_watcher reports a rename as one event with both names", "[w
 	writeFile(tree.path("old.txt"), "x");
 	directory_watcher watcher = watchTree(tree.root(), { .recursive = false });
 
-	REQUIRE(rename_entry(tree.path("old.txt").c_str(), tree.path("new.txt").c_str(), existing_destination::fail));
+	REQUIRE(rename_entry(tree.path("old.txt").c_str(), tree.path("new.txt").c_str(), existing_destination::replace));
 	const auto events = readUntil(watcher, [](const std::vector<watch_event>& read) {
 		return std::ranges::any_of(read, [](const watch_event& event) {
 			return event.kind == watch_event_kind::renamed && event.old_path == native("old.txt") && event.path == native("new.txt");
@@ -263,10 +263,10 @@ TEST_CASE("directory_watcher reports a move across the root's boundary as a crea
 	writeFile(tree.path("out.txt"), "x");
 	directory_watcher watcher = watchTree(tree.root(), { .recursive = false });
 
-	REQUIRE(rename_entry(outside.path("in.txt").c_str(), tree.path("in.txt").c_str(), existing_destination::fail));
+	REQUIRE(rename_entry(outside.path("in.txt").c_str(), tree.path("in.txt").c_str(), existing_destination::replace));
 	(void)readUntilEvent(watcher, watch_event_kind::created, "in.txt");
 
-	REQUIRE(rename_entry(tree.path("out.txt").c_str(), outside.path("out.txt").c_str(), existing_destination::fail));
+	REQUIRE(rename_entry(tree.path("out.txt").c_str(), outside.path("out.txt").c_str(), existing_destination::replace));
 	(void)readUntilEvent(watcher, watch_event_kind::removed, "out.txt");
 }
 
@@ -350,7 +350,7 @@ TEST_CASE("directory_watcher stops with root_lost when the root is moved", "[wat
 	removeTree(movedRoot);
 	directory_watcher watcher = watchTree(tree.root());
 
-	REQUIRE(rename_entry(tree.root().c_str(), movedRoot.c_str(), existing_destination::fail));
+	REQUIRE(rename_entry(tree.root().c_str(), movedRoot.c_str(), existing_destination::replace));
 	const auto events = readUntil(watcher, [](const std::vector<watch_event>& read) { return stopEvent(read) != nullptr; });
 	const watch_event* const stop = stopEvent(events);
 	REQUIRE(stop);
@@ -428,6 +428,31 @@ TEST_CASE("Windows: removing the drive stops the watch with volume_released", "[
 	std::cerr << "Stopped after " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
 		<< " ms, reason " << static_cast<int>(stop->reason) << ", error " << stop->error.native_code << std::endl;
 	CHECK(stop->reason == stop_reason::volume_released);
+}
+#endif
+
+#ifdef __linux__
+TEST_CASE("Linux: the watched root's parent or grandparent being moved stops the watch with root_lost", "[watcher][root]")
+{
+	scratch_tree tree{ "watcher-ancestor-moved" };
+	REQUIRE(create_directory(tree.path("parent").c_str()));
+	REQUIRE(create_directory(tree.path("parent/root").c_str()));
+	REQUIRE(create_directory(tree.path("grandparent").c_str()));
+	REQUIRE(create_directory(tree.path("grandparent/parent").c_str()));
+	REQUIRE(create_directory(tree.path("grandparent/parent/root").c_str()));
+	directory_watcher parentWatcher = watchTree(tree.path("parent/root"));
+	directory_watcher grandparentWatcher = watchTree(tree.path("grandparent/parent/root"));
+
+	REQUIRE(rename_entry(tree.path("parent").c_str(), tree.path("parent-moved").c_str(), existing_destination::replace));
+	REQUIRE(rename_entry(tree.path("grandparent").c_str(), tree.path("grandparent-moved").c_str(), existing_destination::replace));
+	for (directory_watcher* const watcher : { &parentWatcher, &grandparentWatcher })
+	{
+		INFO((watcher == &parentWatcher ? "parent moved" : "grandparent moved"));
+		const auto events = readUntil(*watcher, [](const std::vector<watch_event>& read) { return stopEvent(read) != nullptr; });
+		const watch_event* const stop = stopEvent(events);
+		REQUIRE(stop);
+		CHECK(stop->reason == stop_reason::root_lost);
+	}
 }
 #endif
 

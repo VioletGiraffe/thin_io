@@ -93,6 +93,9 @@ win*{
 	SOURCES += $$files(src/*_linux.cpp, true)
 }
 
+# Named by mechanism, not *_linux: that glob builds macOS too
+linux*:SOURCES += src/directory_watcher_inotify.cpp
+
 win*{
 	DEFINES += WIN32_LEAN_AND_MEAN NOMINMAX
 }
