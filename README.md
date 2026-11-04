@@ -7,7 +7,7 @@ or directory timestamps, and directory change watching.
 | Header | Facility |
 |---|---|
 | [`src/file_interface.hpp`](src/file_interface.hpp) | The main file interface |
-| [`src/buffered_reader.hpp`](src/buffered_reader.hpp) | Read-only access for many small reads at scattered positions: a window keeps the bytes already read, so seeks within it cost no I/O |
+| [`src/buffered_reader.hpp`](src/buffered_reader.hpp) | Read-only access for many small reads at scattered positions: two windows keep the bytes already read, so seeks within them cost no I/O |
 | [`src/fs.hpp`](src/fs.hpp) | Timestamp operations, and synchronous single-directory discovery and accounting |
 | [`src/directory_watcher.hpp`](src/directory_watcher.hpp) | Change notifications for one directory or a subtree |
 | [`src/directory_snapshot.hpp`](src/directory_snapshot.hpp) | Polling one directory for changes where notifications may never arrive |

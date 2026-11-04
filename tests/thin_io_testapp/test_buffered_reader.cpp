@@ -2,6 +2,8 @@
 
 #include "buffered_reader.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <span>
 #include <utility>
 #include <vector>
@@ -260,6 +262,83 @@ TEST_CASE("buffered_reader: no I/O at a known end of file", "[buffered_reader]")
 	}
 }
 
+// Reads at pos and requires the bytes pwriteToTestFile() wrote there: the read reached the file
+static void requireWrittenAt(buffered_reader& reader, const uint64_t pos, const std::span<const std::byte> written)
+{
+	reader.set_pos(pos);
+	std::vector<std::byte> bytes(written.size());
+	REQUIRE(reader.read(bytes.data(), bytes.size()) == bytes.size());
+	REQUIRE(std::ranges::equal(bytes, written));
+}
+
+// An 8 KB window size keeps every region below apart, and away from the end of file
+TEST_CASE("buffered_reader: two windows", "[buffered_reader]")
+{
+	const TestFile testFile;
+	buffered_reader reader{ 8192 };
+	REQUIRE(reader.open(testFilePath));
+	requireReadAt(reader, 0, 8);
+	requireReadAt(reader, 100000, 8);
+	const std::vector<std::byte> written(8, std::byte{ 0xAA });
+	pwriteToTestFile(written, 0);
+	pwriteToTestFile(written, 100000);
+
+	SECTION("reads alternating between two regions cost no I/O")
+	{
+		for (int i = 0; i < 3; ++i)
+		{
+			requireReadAt(reader, 0, 8);
+			requireReadAt(reader, 100000, 8);
+		}
+	}
+
+	SECTION("a third region replaces the less recently used window")
+	{
+		requireReadAt(reader, 0, 8);
+		requireReadAt(reader, 200000, 8);
+		requireReadAt(reader, 0, 8);
+		requireWrittenAt(reader, 100000, written);
+	}
+}
+
+TEST_CASE("buffered_reader: windows near a known end of file", "[buffered_reader]")
+{
+	const TestFile testFile;
+	buffered_reader reader{ 8192 };
+	REQUIRE(reader.open(testFilePath));
+	std::vector<std::byte> bytes(50);
+	// Finds the end of file, then moves both windows away from it
+	reader.set_pos(testFileSize - 10);
+	REQUIRE(reader.read(bytes.data(), 50) == 10u);
+	requireReadAt(reader, 0, 8);
+	requireReadAt(reader, 100000, 8);
+
+	SECTION("a window filled near it ends at it")
+	{
+		requireReadAt(reader, testFileSize - 10, 10);
+		pwriteToTestFile(std::vector<std::byte>(8, std::byte{ 0xAA }), testFileSize - 8000);
+		requireReadAt(reader, testFileSize - 8000, 8);
+	}
+
+	SECTION("a refill does not read past it")
+	{
+		pwriteToTestFile(std::vector<std::byte>(16, std::byte{ 0xAA }), testFileSize);
+		reader.set_pos(testFileSize - 10);
+		REQUIRE(reader.read(bytes.data(), 50) == 10u);
+		REQUIRE(matchesFileAt(std::span{ bytes }.first(10), testFileSize - 10));
+	}
+
+	SECTION("a read larger than the window does not read past it")
+	{
+		pwriteToTestFile(std::vector<std::byte>(16, std::byte{ 0xAA }), testFileSize);
+		std::vector<std::byte> large(30000);
+		reader.set_pos(testFileSize - 20000);
+		REQUIRE(reader.read(large.data(), large.size()) == 20000u);
+		REQUIRE(matchesFileAt(std::span{ large }.first(20000), testFileSize - 20000));
+		REQUIRE(reader.pos() == testFileSize);
+	}
+}
+
 TEST_CASE("buffered_reader: peek", "[buffered_reader]")
 {
 	const TestFile testFile;
@@ -320,6 +399,9 @@ TEST_CASE("buffered_reader: window size", "[buffered_reader]")
 	REQUIRE(buffered_reader{ 0 }.window_size() == 4096u);
 	REQUIRE(buffered_reader{ 6000 }.window_size() == 4096u);
 	REQUIRE(buffered_reader{ 8192 }.window_size() == 8192u);
+	// Sizes whose windows' total would overflow size_t
+	REQUIRE(buffered_reader{ SIZE_MAX / 2 + 1 }.window_size() == buffered_reader::max_window_size);
+	REQUIRE(buffered_reader{ SIZE_MAX }.window_size() == buffered_reader::max_window_size);
 
 	const TestFile testFile;
 	buffered_reader reader{ 8192 };

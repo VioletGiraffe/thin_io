@@ -20,6 +20,7 @@ static_assert((file::sharing_mode::ShareRead | file::sharing_mode::ShareWrite | 
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 // Actual on-disk allocation in bytes: ~0 for a sparse file, >= the logical size when the space is really reserved
@@ -587,6 +588,41 @@ TEST_CASE("pread", "[file]")
 
 	REQUIRE(file::delete_file(testFilePath));
 }
+
+#ifndef _WIN32
+// macOS fails a transfer of more than INT_MAX bytes with EINVAL; Linux shortens it
+TEST_CASE("read and pread of more than INT_MAX bytes are partial transfers", "[file]")
+{
+	static constexpr const char testFilePath[] = "test.file";
+	static constexpr const char testString[] = "The quick brown fox jumps over the lazy dog";
+	file::delete_file(testFilePath);
+	REQUIRE(createTestFile(testFilePath, testString, sizeof(testString)));
+
+	// Address space only: the kernel touches just the pages it writes
+	constexpr size_t size = size_t{ 3 } << 30;
+	int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_NORESERVE
+	flags |= MAP_NORESERVE;
+#endif
+	void* const dest = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, flags, -1, 0);
+	if (dest == MAP_FAILED)
+	{
+		WARN("3 GiB of address space is unavailable; oversized transfer assertions skipped");
+		REQUIRE(file::delete_file(testFilePath));
+		return;
+	}
+
+	file f;
+	REQUIRE(f.open(testFilePath, file::access_mode::Read));
+	CHECK(f.pread(dest, size, 0) == sizeof(testString));
+	CHECK(::memcmp(dest, testString, sizeof(testString)) == 0);
+	CHECK(f.read(dest, size) == sizeof(testString));
+	REQUIRE(f.close());
+
+	::munmap(dest, size);
+	REQUIRE(file::delete_file(testFilePath));
+}
+#endif
 
 TEST_CASE("pwrite", "[file]")
 {

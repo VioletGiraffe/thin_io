@@ -30,6 +30,13 @@ using off64_t = off_t;
 
 using namespace thin_io;
 
+// macOS fails a transfer of more than INT_MAX bytes with EINVAL; an oversized request is clamped and completes as a partial
+// transfer, which callers must handle anyway. The clamp is 64 KiB-aligned so aligned O_DIRECT I/O stays aligned.
+[[nodiscard]] static inline constexpr size_t requestableIoSize(const uint64_t size) noexcept
+{
+	constexpr size_t maxRequestSize = 0x7FFF'0000u;
+	return size < maxRequestSize ? static_cast<size_t>(size) : maxRequestSize;
+}
 
 bool file_impl::open(const char* path, const access_mode accessMode, const open_disposition disposition,
 					 sys_cache_mode cacheMode, sharing_mode /*sharingMode*/) noexcept
@@ -113,13 +120,13 @@ bool file_impl::close() noexcept
 
 std::optional<uint64_t> file_impl::read(void *dest, uint64_t size) noexcept
 {
-	ssize_t bytesRead = ::read(_fd, dest, size);
+	ssize_t bytesRead = ::read(_fd, dest, requestableIoSize(size));
 	return bytesRead >= 0 ? static_cast<uint64_t>(bytesRead) : std::optional<uint64_t>{};
 }
 
 std::optional<uint64_t> file_impl::write(const void *src, uint64_t size) noexcept
 {
-	const ssize_t bytesWritten = ::write(_fd, src, size);
+	const ssize_t bytesWritten = ::write(_fd, src, requestableIoSize(size));
 	return bytesWritten >= 0 ? static_cast<uint64_t>(bytesWritten) : std::optional<uint64_t>{};
 }
 
@@ -129,13 +136,13 @@ std::optional<uint64_t> file_impl::pread(void *dest, uint64_t size, uint64_t pos
 	if (pos > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) [[unlikely]]
 		return 0;
 
-	const ssize_t bytesRead = ::pread64(_fd, dest, size, static_cast<off64_t>(pos));
+	const ssize_t bytesRead = ::pread64(_fd, dest, requestableIoSize(size), static_cast<off64_t>(pos));
 	return bytesRead >= 0 ? static_cast<uint64_t>(bytesRead) : std::optional<uint64_t>{};
 }
 
 std::optional<uint64_t> file_impl::pwrite(const void *src, uint64_t size, uint64_t pos) noexcept
 {
-	const ssize_t bytesWritten = ::pwrite64(_fd, src, size, static_cast<off64_t>(pos));
+	const ssize_t bytesWritten = ::pwrite64(_fd, src, requestableIoSize(size), static_cast<off64_t>(pos));
 	return bytesWritten >= 0 ? static_cast<uint64_t>(bytesWritten) : std::optional<uint64_t>{};
 }
 
