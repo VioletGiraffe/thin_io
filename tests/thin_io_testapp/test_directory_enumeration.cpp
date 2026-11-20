@@ -11,11 +11,11 @@
 #include <vector>
 
 #ifdef _WIN32
+#include "test_reparse_win.hpp"
 #include "windows_path_win.hpp"
 
 #include <Windows.h>
 #include <AclAPI.h>
-#include <winioctl.h>
 
 #pragma comment(lib, "advapi32.lib") // Security descriptor APIs
 
@@ -570,83 +570,6 @@ private:
 	PACL _originalAcl = nullptr; // Points into _originalDescriptor
 	bool _applied = false;
 };
-
-// The mount-point variant of REPARSE_DATA_BUFFER lives in the DDK's ntifs.h, not the SDK; mirror just that layout.
-struct mount_point_reparse_buffer final {
-	ULONG   ReparseTag;
-	USHORT  ReparseDataLength;
-	USHORT  Reserved;
-	USHORT  SubstituteNameOffset;
-	USHORT  SubstituteNameLength;
-	USHORT  PrintNameOffset;
-	USHORT  PrintNameLength;
-	wchar_t PathBuffer[1];
-};
-
-// Unlike a symbolic link, a junction needs no privilege, so this always runs on CI. There is no Win32 wrapper for it:
-// the reparse point is set by hand via FSCTL_SET_REPARSE_POINT with an absolute NT-namespace target.
-[[nodiscard]] bool createJunction(const wchar_t* const linkPath, const wchar_t* const targetPath)
-{
-	if (!createDirectory(linkPath))
-		return false;
-
-	std::array<wchar_t, windows_path_buffer::max_length + 1> absoluteTarget{};
-	const DWORD targetLength = ::GetFullPathNameW(targetPath, static_cast<DWORD>(absoluteTarget.size()), absoluteTarget.data(), nullptr);
-	if (targetLength == 0 || targetLength >= absoluteTarget.size())
-		return false;
-
-	const std::wstring substituteName = std::wstring{L"\\??\\"} + std::wstring{absoluteTarget.data(), targetLength};
-	const std::wstring_view printName{absoluteTarget.data(), targetLength};
-	const size_t pathBufferChars = substituteName.size() + 1 + printName.size() + 1; // both names, each NUL-terminated
-
-	alignas(mount_point_reparse_buffer) std::array<std::byte, MAXIMUM_REPARSE_DATA_BUFFER_SIZE> storage{};
-	auto* const reparse = reinterpret_cast<mount_point_reparse_buffer*>(storage.data());
-	reparse->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
-	reparse->ReparseDataLength = static_cast<USHORT>(4 * sizeof(USHORT) + pathBufferChars * sizeof(wchar_t));
-	reparse->SubstituteNameOffset = 0;
-	reparse->SubstituteNameLength = static_cast<USHORT>(substituteName.size() * sizeof(wchar_t));
-	reparse->PrintNameOffset = static_cast<USHORT>((substituteName.size() + 1) * sizeof(wchar_t));
-	reparse->PrintNameLength = static_cast<USHORT>(printName.size() * sizeof(wchar_t));
-	std::copy_n(substituteName.c_str(), substituteName.size() + 1, reparse->PathBuffer); // includes the terminating NUL
-	std::copy_n(printName.data(), printName.size(), reparse->PathBuffer + substituteName.size() + 1);
-	reparse->PathBuffer[substituteName.size() + 1 + printName.size()] = L'\0';
-
-	windows_path_buffer preparedLink{linkPath};
-	if (!preparedLink)
-		return false;
-	const HANDLE handle = ::CreateFileW(preparedLink.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-	if (handle == INVALID_HANDLE_VALUE)
-		return false;
-
-	const DWORD inputSize = static_cast<DWORD>(FIELD_OFFSET(mount_point_reparse_buffer, PathBuffer) + pathBufferChars * sizeof(wchar_t));
-	DWORD ignored = 0;
-	const bool set = ::DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, reparse, inputSize, nullptr, 0, &ignored, nullptr) != 0;
-	::CloseHandle(handle);
-	return set;
-}
-
-// A non-Microsoft tag requires the GUID buffer layout. No filter owns it, so the entry opens only as the reparse point itself.
-[[nodiscard]] bool setThirdPartyReparsePoint(const wchar_t* const path, const DWORD tag)
-{
-	windows_path_buffer preparedPath{path};
-	if (!preparedPath)
-		return false;
-	const HANDLE handle = ::CreateFileW(preparedPath.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-	if (handle == INVALID_HANDLE_VALUE)
-		return false;
-
-	REPARSE_GUID_DATA_BUFFER reparse{};
-	reparse.ReparseTag = tag;
-	reparse.ReparseDataLength = 1;
-	reparse.ReparseGuid = {0x6f1c3a52, 0x1d4e, 0x4b8a, {0x9c, 0x31, 0x2e, 0x7d, 0x5a, 0x40, 0x8b, 0x16}};
-	DWORD ignored = 0;
-	const bool set = ::DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, &reparse, REPARSE_GUID_DATA_BUFFER_HEADER_SIZE + reparse.ReparseDataLength,
-		nullptr, 0, &ignored, nullptr) != 0;
-	::CloseHandle(handle);
-	return set;
-}
 
 } // namespace
 

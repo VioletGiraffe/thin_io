@@ -7,7 +7,11 @@
 #include "utility/heap_optional.hpp" // cpp-template-utils
 
 #include <Windows.h>
+#include <winioctl.h> // FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,11 +20,10 @@
 
 namespace thin_io {
 
-[[nodiscard]] static bool setPreparedTimes(const wchar_t* path, const entry_times& times) noexcept
+[[nodiscard]] static bool setPreparedTimes(const wchar_t* path, const entry_times& times, const DWORD openFlags) noexcept
 {
-	// FILE_FLAG_BACKUP_SEMANTICS is what makes a handle to a directory possible; it is a no-op for regular files.
 	const HANDLE h = ::CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-								  nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+								  nullptr, OPEN_EXISTING, openFlags, nullptr);
 	if (h == INVALID_HANDLE_VALUE) [[unlikely]]
 		return false;
 
@@ -33,9 +36,31 @@ namespace thin_io {
 	return success;
 }
 
-template <class Character>
-[[nodiscard]] static bool setTimesForPath(const Character* path, const entry_times& times) noexcept
+// The CreateFileW flags for an attribute handle to a file or a directory. Empty for a value outside the enum.
+[[nodiscard]] static std::optional<DWORD> attributeHandleFlagsFor(const link_behavior linkBehavior) noexcept
 {
+	// FILE_FLAG_BACKUP_SEMANTICS is what makes a handle to a directory possible; it is a no-op for regular files.
+	switch (linkBehavior)
+	{
+	case link_behavior::follow:
+		return FILE_FLAG_BACKUP_SEMANTICS;
+	case link_behavior::do_not_follow:
+		return FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+	default:
+		return {};
+	}
+}
+
+template <class Character>
+[[nodiscard]] static bool setTimesForPath(const Character* path, const entry_times& times, const link_behavior linkBehavior) noexcept
+{
+	const auto openFlags = attributeHandleFlagsFor(linkBehavior);
+	if (!openFlags) [[unlikely]]
+	{
+		::SetLastError(ERROR_INVALID_PARAMETER);
+		return false;
+	}
+
 	if (!times.creation.is_set() && !times.last_access.is_set() && !times.last_write.is_set())
 		return true; // Nothing to write, so don't even open the path - matching the POSIX implementation
 
@@ -46,17 +71,17 @@ template <class Character>
 		return false;
 	}
 
-	return setPreparedTimes(nativePath.c_str(), times);
+	return setPreparedTimes(nativePath.c_str(), times, *openFlags);
 }
 
-bool set_times(const char* path, const entry_times& times) noexcept
+bool set_times(const char* path, const entry_times& times, const link_behavior linkBehavior) noexcept
 {
-	return setTimesForPath(path, times);
+	return setTimesForPath(path, times, linkBehavior);
 }
 
-bool set_times(const wchar_t* path, const entry_times& times) noexcept
+bool set_times(const wchar_t* path, const entry_times& times, const link_behavior linkBehavior) noexcept
 {
-	return setTimesForPath(path, times);
+	return setTimesForPath(path, times, linkBehavior);
 }
 
 [[nodiscard]] static entry_times timesFromWindows(const FILETIME& creation, const FILETIME& lastAccess, const FILETIME& lastWrite) noexcept
@@ -322,24 +347,16 @@ template <class Character>
 template <class Character>
 [[nodiscard]] filesystem_result<HANDLE> openForAttributes(const Character* path, const DWORD access, const link_behavior linkBehavior) noexcept
 {
-	DWORD openFlags = FILE_FLAG_BACKUP_SEMANTICS; // Required to open a directory
-	switch (linkBehavior)
-	{
-	case link_behavior::follow:
-		break;
-	case link_behavior::do_not_follow:
-		openFlags |= FILE_FLAG_OPEN_REPARSE_POINT;
-		break;
-	default:
+	const auto openFlags = attributeHandleFlagsFor(linkBehavior);
+	if (!openFlags) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
-	}
 
 	windows_path_buffer nativePath{path};
 	if (!nativePath) [[unlikely]]
 		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
 
 	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), access,
-		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, openFlags, nullptr);
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, *openFlags, nullptr);
 	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
 		return std::unexpected{capture_last_filesystem_error()};
 	return nativeHandle;
@@ -611,6 +628,205 @@ template <class Character>
 	return entry;
 }
 
+// What the symbolic-link and mount-point variants of REPARSE_DATA_BUFFER share; the struct lives in the DDK's ntifs.h,
+// not the SDK. The names follow in a path buffer: directly for a mount point, after a ULONG of flags for a symbolic link.
+struct reparse_link_header final {
+	ULONG  ReparseTag;
+	USHORT ReparseDataLength; // Counts the bytes from SubstituteNameOffset on
+	USHORT Reserved;
+	USHORT SubstituteNameOffset;
+	USHORT SubstituteNameLength;
+	USHORT PrintNameOffset;
+	USHORT PrintNameLength;
+};
+
+constexpr size_t mountPointPathBufferOffset = sizeof(reparse_link_header);
+constexpr size_t symbolicLinkPathBufferOffset = sizeof(reparse_link_header) + sizeof(ULONG);
+
+constexpr ULONG symlinkFlagRelative = 0x1; // SYMLINK_FLAG_RELATIVE from ntifs.h
+constexpr std::wstring_view ntPathPrefix = LR"(\??\)";
+constexpr std::wstring_view ntUncPathPrefix = LR"(\??\UNC\)";
+
+// Empty when the name lies outside the pathBufferBytes the query returned.
+[[nodiscard]] std::optional<std::wstring_view> reparseName(const wchar_t* const pathBuffer, const size_t pathBufferBytes,
+	const USHORT byteOffset, const USHORT byteLength) noexcept
+{
+	if (byteOffset % sizeof(wchar_t) != 0 || byteLength % sizeof(wchar_t) != 0 || size_t{byteOffset} + byteLength > pathBufferBytes) [[unlikely]]
+		return {};
+	return std::wstring_view{pathBuffer + byteOffset / sizeof(wchar_t), byteLength / sizeof(wchar_t)};
+}
+
+// The print name, or where the creating tool stored none, the substitute name without its NT namespace prefix.
+[[nodiscard]] native_string userFormTarget(const std::wstring_view substituteName, const std::wstring_view printName, const bool relative)
+{
+	if (!printName.empty())
+		return native_string{printName};
+	if (relative)
+		return native_string{substituteName};
+	if (substituteName.starts_with(ntUncPathPrefix))
+		return LR"(\\)" + native_string{substituteName.substr(ntUncPathPrefix.size())};
+	if (substituteName.starts_with(ntPathPrefix))
+		return native_string{substituteName.substr(ntPathPrefix.size())};
+	return native_string{substituteName};
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<link_definition> readLink(const Character* path)
+{
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+	// A trailing separator is ignored, as POSIX ignores it here
+	if (!isRootPath({ nativePath.c_str(), nativePath.length() }))
+		nativePath.remove_trailing_separator();
+
+	const HANDLE nativeHandle = ::CreateFileW(nativePath.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	file_handle handle{nativeHandle};
+
+	FILE_BASIC_INFO basicInfo{};
+	if (::GetFileInformationByHandleEx(nativeHandle, FileBasicInfo, &basicInfo, sizeof(basicInfo)) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	if ((basicInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
+		return std::unexpected{filesystem_error{ .native_code = ERROR_NOT_A_REPARSE_POINT }};
+
+	alignas(reparse_link_header) std::array<std::byte, MAXIMUM_REPARSE_DATA_BUFFER_SIZE> storage{};
+	DWORD returnedBytes = 0;
+	if (::DeviceIoControl(nativeHandle, FSCTL_GET_REPARSE_POINT, nullptr, 0, storage.data(), static_cast<DWORD>(storage.size()), &returnedBytes, nullptr) == 0) [[unlikely]]
+		return std::unexpected{capture_last_filesystem_error()};
+	if (returnedBytes < sizeof(reparse_link_header)) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_DATA }};
+
+	const auto& header = *reinterpret_cast<const reparse_link_header*>(storage.data());
+	if (!IsReparseTagNameSurrogate(header.ReparseTag))
+		return std::unexpected{filesystem_error{ .native_code = ERROR_NOT_A_REPARSE_POINT }};
+
+	link_definition definition;
+	size_t pathBufferOffset = mountPointPathBufferOffset;
+	bool relative = false;
+	switch (header.ReparseTag)
+	{
+	case IO_REPARSE_TAG_SYMLINK:
+		pathBufferOffset = symbolicLinkPathBufferOffset;
+		if (returnedBytes < pathBufferOffset) [[unlikely]]
+			return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_DATA }};
+		relative = (*reinterpret_cast<const ULONG*>(storage.data() + sizeof(reparse_link_header)) & symlinkFlagRelative) != 0;
+		definition.type = (basicInfo.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? link_type::directory_symbolic_link : link_type::symbolic_link;
+		break;
+	case IO_REPARSE_TAG_MOUNT_POINT:
+		definition.type = link_type::junction;
+		break;
+	default:
+		return std::unexpected{filesystem_error{ .native_code = ERROR_NOT_SUPPORTED }};
+	}
+
+	const auto* const pathBuffer = reinterpret_cast<const wchar_t*>(storage.data() + pathBufferOffset);
+	const size_t pathBufferBytes = returnedBytes - pathBufferOffset;
+	const auto substituteName = reparseName(pathBuffer, pathBufferBytes, header.SubstituteNameOffset, header.SubstituteNameLength);
+	const auto printName = reparseName(pathBuffer, pathBufferBytes, header.PrintNameOffset, header.PrintNameLength);
+	if (!substituteName || !printName) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_DATA }};
+	// A volume mount point names a volume, which a junction cannot recreate
+	if (definition.type == link_type::junction && substituteName->starts_with(LR"(\??\Volume{)"))
+		return std::unexpected{filesystem_error{ .native_code = ERROR_NOT_SUPPORTED }};
+	definition.target = userFormTarget(*substituteName, *printName, relative);
+
+	if (const auto closeError = handle.close()) [[unlikely]]
+		return std::unexpected{*closeError};
+	return definition;
+}
+
+[[nodiscard]] bool isDriveAbsolutePath(const std::wstring_view path) noexcept
+{
+	return path.size() >= 3 && ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) && path[1] == L':' && path[2] == L'\\';
+}
+
+// A directory carrying a mount-point reparse point whose substitute name is the target in the NT namespace.
+[[nodiscard]] filesystem_result<void> createJunction(const wchar_t* const preparedPath, const std::wstring_view target) noexcept
+{
+	// The substitute name is the target behind the NT prefix, in place of a \\?\ prefix it may already have
+	std::wstring_view targetWithoutPrefix = target;
+	if (targetWithoutPrefix.starts_with(LR"(\\?\)"))
+		targetWithoutPrefix.remove_prefix(4);
+	if (!isDriveAbsolutePath(targetWithoutPrefix)) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
+
+	const size_t substituteNameLength = ntPathPrefix.size() + targetWithoutPrefix.size();
+	const size_t pathBufferChars = substituteNameLength + 1 + target.size() + 1; // Both names, each NUL-terminated
+	const size_t inputBytes = mountPointPathBufferOffset + pathBufferChars * sizeof(wchar_t);
+	if (inputBytes > MAXIMUM_REPARSE_DATA_BUFFER_SIZE) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_FILENAME_EXCED_RANGE }};
+
+	alignas(reparse_link_header) std::array<std::byte, MAXIMUM_REPARSE_DATA_BUFFER_SIZE> storage{};
+	auto& header = *reinterpret_cast<reparse_link_header*>(storage.data());
+	header.ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
+	header.ReparseDataLength = static_cast<USHORT>(inputBytes - offsetof(reparse_link_header, SubstituteNameOffset));
+	header.SubstituteNameOffset = 0;
+	header.SubstituteNameLength = static_cast<USHORT>(substituteNameLength * sizeof(wchar_t));
+	header.PrintNameOffset = static_cast<USHORT>((substituteNameLength + 1) * sizeof(wchar_t));
+	header.PrintNameLength = static_cast<USHORT>(target.size() * sizeof(wchar_t));
+	auto* const pathBuffer = reinterpret_cast<wchar_t*>(storage.data() + mountPointPathBufferOffset);
+	wchar_t* const substituteName = std::copy_n(ntPathPrefix.data(), ntPathPrefix.size(), pathBuffer);
+	std::copy_n(targetWithoutPrefix.data(), targetWithoutPrefix.size(), substituteName);
+	std::copy_n(target.data(), target.size(), pathBuffer + substituteNameLength + 1); // The zeroed storage supplies both NULs
+
+	if (::CreateDirectoryW(preparedPath, nullptr) == 0)
+		return std::unexpected{capture_last_filesystem_error()};
+
+	const HANDLE nativeHandle = ::CreateFileW(preparedPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	std::optional<filesystem_error> failure;
+	if (nativeHandle == INVALID_HANDLE_VALUE) [[unlikely]]
+		failure = capture_last_filesystem_error();
+	else
+	{
+		file_handle handle{nativeHandle};
+		DWORD ignored = 0;
+		if (::DeviceIoControl(nativeHandle, FSCTL_SET_REPARSE_POINT, storage.data(), static_cast<DWORD>(inputBytes), nullptr, 0, &ignored, nullptr) == 0)
+			failure = capture_last_filesystem_error();
+		else if (const auto closeError = handle.close()) [[unlikely]]
+			failure = *closeError;
+	}
+
+	if (failure)
+	{
+		(void)::RemoveDirectoryW(preparedPath); // Created above; a junction is removed as itself, its target untouched
+		return std::unexpected{*failure};
+	}
+	return {};
+}
+
+template <class Character>
+[[nodiscard]] filesystem_result<void> createLink(const Character* path, const link_definition& definition) noexcept
+{
+	if (definition.target.empty() || definition.target.find(L'\0') != native_string::npos) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
+
+	windows_path_buffer nativePath{path};
+	if (!nativePath) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = nativePath.error_code() }};
+
+	switch (definition.type)
+	{
+	case link_type::symbolic_link:
+	case link_type::directory_symbolic_link:
+	{
+		DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+		if (definition.type == link_type::directory_symbolic_link)
+			flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+		if (::CreateSymbolicLinkW(nativePath.c_str(), definition.target.c_str(), flags) == 0)
+			return std::unexpected{capture_last_filesystem_error()};
+		return {};
+	}
+	case link_type::junction:
+		return createJunction(nativePath.c_str(), definition.target);
+	default:
+		return std::unexpected{filesystem_error{ .native_code = ERROR_INVALID_PARAMETER }};
+	}
+}
+
 } // namespace
 
 filesystem_result<void> can_list_directory(const char* path) noexcept
@@ -701,6 +917,26 @@ filesystem_result<void> remove_entry(const char* path) noexcept
 filesystem_result<void> remove_entry(const wchar_t* path) noexcept
 {
 	return removeEntry(path);
+}
+
+filesystem_result<link_definition> read_link(const char* path)
+{
+	return readLink(path);
+}
+
+filesystem_result<link_definition> read_link(const wchar_t* path)
+{
+	return readLink(path);
+}
+
+filesystem_result<void> create_link(const char* path, const link_definition& definition) noexcept
+{
+	return createLink(path, definition);
+}
+
+filesystem_result<void> create_link(const wchar_t* path, const link_definition& definition) noexcept
+{
+	return createLink(path, definition);
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* directoryPath) noexcept

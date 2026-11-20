@@ -30,12 +30,37 @@
 
 namespace thin_io {
 
-bool set_times(const char* path, const entry_times& times) noexcept
+namespace {
+
+// The AT_* flag for a *at() call. Empty for a value outside the enum.
+[[nodiscard]] std::optional<int> atFlagFor(const link_behavior linkBehavior) noexcept
 {
+	switch (linkBehavior)
+	{
+	case link_behavior::follow:
+		return 0;
+	case link_behavior::do_not_follow:
+		return AT_SYMLINK_NOFOLLOW;
+	default:
+		return {};
+	}
+}
+
+} // namespace
+
+bool set_times(const char* path, const entry_times& times, const link_behavior linkBehavior) noexcept
+{
+	const auto linkFlag = atFlagFor(linkBehavior);
+	if (!linkFlag) [[unlikely]]
+	{
+		errno = EINVAL;
+		return false;
+	}
+
 	if (times.last_access.is_set() || times.last_write.is_set())
 	{
 		const timespec ts[2] { toTimespecOrOmit(times.last_access), toTimespecOrOmit(times.last_write) };
-		if (::utimensat(AT_FDCWD, path, ts, 0) != 0)
+		if (::utimensat(AT_FDCWD, path, ts, *linkFlag) != 0)
 			return false;
 	}
 
@@ -51,7 +76,7 @@ bool set_times(const char* path, const entry_times& times) noexcept
 		attributes.commonattr = ATTR_CMN_CRTIME;
 
 		timespec creation = toTimespec(times.creation);
-		if (::setattrlist(path, &attributes, &creation, sizeof(creation), 0) != 0)
+		if (::setattrlist(path, &attributes, &creation, sizeof(creation), linkBehavior == link_behavior::follow ? 0 : FSOPT_NOFOLLOW) != 0)
 			return false;
 	}
 #else
@@ -126,20 +151,6 @@ private:
 [[nodiscard]] file_permissions permissionsFromMode(const mode_t mode) noexcept
 {
 	return file_permissions{ .mode = static_cast<uint32_t>(mode) & 07777u };
-}
-
-// The AT_* flag for a *at() call. Empty for a value outside the enum.
-[[nodiscard]] std::optional<int> atFlagFor(const link_behavior linkBehavior) noexcept
-{
-	switch (linkBehavior)
-	{
-	case link_behavior::follow:
-		return 0;
-	case link_behavior::do_not_follow:
-		return AT_SYMLINK_NOFOLLOW;
-	default:
-		return {};
-	}
 }
 
 template<class Inode>
@@ -540,6 +551,45 @@ filesystem_result<void> remove_entry(const char* const path) noexcept
 	// ENOTDIR: the entry is not a directory, so EPERM was unlink()'s real failure.
 	const filesystem_error rmdirError = capture_last_filesystem_error();
 	return std::unexpected{rmdirError.native_code == ENOTDIR ? unlinkError : rmdirError};
+}
+
+filesystem_result<link_definition> read_link(const char* const path)
+{
+	if (path == nullptr) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	// A trailing separator would make readlink() resolve the link
+	std::string_view pathView{path};
+	while (pathView.size() > 1 && pathView.back() == '/')
+		pathView.remove_suffix(1);
+	const std::string linkPath{pathView};
+
+	// readlink() truncates silently: a result that fills the buffer may be cut short, so it is read again into a larger one.
+	link_definition definition;
+	for (size_t capacity = 256;; capacity *= 2)
+	{
+		definition.target.resize(capacity);
+		const ssize_t length = ::readlink(linkPath.c_str(), definition.target.data(), capacity);
+		if (length < 0)
+			return std::unexpected{capture_last_filesystem_error()};
+		if (static_cast<size_t>(length) < capacity)
+		{
+			definition.target.resize(static_cast<size_t>(length));
+			return definition;
+		}
+	}
+}
+
+filesystem_result<void> create_link(const char* const path, const link_definition& definition) noexcept
+{
+	// symlink() would store only the part of the target before an embedded NUL
+	if (path == nullptr || definition.type != link_type::symbolic_link || definition.target.empty()
+		|| definition.target.find('\0') != native_string::npos) [[unlikely]]
+		return std::unexpected{filesystem_error{ .native_code = EINVAL }};
+
+	if (::symlink(definition.target.c_str(), path) != 0)
+		return std::unexpected{capture_last_filesystem_error()};
+	return {};
 }
 
 filesystem_result<filesystem_space> get_filesystem_space(const char* const directoryPath) noexcept

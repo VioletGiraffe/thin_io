@@ -158,4 +158,20 @@ enum class existing_destination : uint8_t {
 	replace
 };
 
+enum class link_type : uint8_t {
+	symbolic_link,           // Every POSIX symbolic link; on Windows, one without the directory attribute
+	directory_symbolic_link, // Windows only: a symbolic link with the directory attribute
+	junction                 // Windows only: a mount point that names a directory path, not a volume
+};
+
+// What a link stores, as read_link() reports it and create_link() recreates it.
+struct link_definition {
+	link_type type = link_type::symbolic_link;
+	// The target exactly as stored, never resolved: a relative target stays relative.
+	// Windows: the form a user types, such as C:\data or \\server\share: the print name, or the substitute name where none is stored.
+	native_string target;
+
+	[[nodiscard]] bool operator==(const link_definition&) const noexcept = default;
+};
+
 } // namespace thin_io

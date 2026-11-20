@@ -8,12 +8,12 @@
 
 namespace thin_io {
 
-// Applies the requested timestamps to an existing file or directory, following links. Requesting nothing succeeds
-// without touching the path at all, and so does requesting only a creation time where that isn't settable. Returns
-// false on failure, in which case file::error_code() and file::text_for_last_error() report the native reason.
-[[nodiscard]] bool set_times(const char* path, const entry_times& times) noexcept;
+// Applies the requested timestamps to an existing file or directory, or with do_not_follow to a link itself. Requesting
+// nothing succeeds without touching the path at all, and so does requesting only a creation time where that isn't
+// settable. Returns false on failure, in which case file::error_code() and file::text_for_last_error() report the native reason.
+[[nodiscard]] bool set_times(const char* path, const entry_times& times, link_behavior linkBehavior = link_behavior::follow) noexcept;
 #ifdef _WIN32
-[[nodiscard]] bool set_times(const wchar_t* path, const entry_times& times) noexcept;
+[[nodiscard]] bool set_times(const wchar_t* path, const entry_times& times, link_behavior linkBehavior = link_behavior::follow) noexcept;
 #endif
 
 // Reports the timestamps of an existing file or directory, following links. The access and modification times are
@@ -99,6 +99,24 @@ namespace thin_io {
 [[nodiscard]] filesystem_result<void> remove_entry(const char* path) noexcept;
 #ifdef _WIN32
 [[nodiscard]] filesystem_result<void> remove_entry(const wchar_t* path) noexcept;
+#endif
+
+// Reports what the link at path stores, never following it. A trailing separator is ignored.
+// Fails on an entry that is not a link: EINVAL, or ERROR_NOT_A_REPARSE_POINT on Windows.
+// Windows: fails with ERROR_NOT_SUPPORTED on any other kind of link, such as a volume mount point or a WSL symbolic link.
+[[nodiscard]] filesystem_result<link_definition> read_link(const char* path);
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<link_definition> read_link(const wchar_t* path);
+#endif
+
+// Creates a link at path, storing the definition's non-empty target verbatim. Fails when path exists.
+// POSIX: only link_type::symbolic_link, otherwise EINVAL.
+// Windows: a symbolic link needs Developer Mode or the symbolic-link privilege, without which it fails with
+// ERROR_PRIVILEGE_NOT_HELD. A junction needs no privilege, but an absolute local target: ERROR_INVALID_PARAMETER otherwise.
+// Windows: a junction starts as a directory, removed again when it cannot become one, such as on a filesystem without reparse points.
+[[nodiscard]] filesystem_result<void> create_link(const char* path, const link_definition& definition) noexcept;
+#ifdef _WIN32
+[[nodiscard]] filesystem_result<void> create_link(const wchar_t* path, const link_definition& definition) noexcept;
 #endif
 
 // Reports space for the filesystem containing directoryPath. Symbolic links and reparse points are followed.

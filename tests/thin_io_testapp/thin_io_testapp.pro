@@ -104,7 +104,8 @@ SOURCES += \
 	test_filesystem_error.cpp \
 	test_filesystem_space.cpp \
 	test_filesystem_types.cpp \
-	test_fs.cpp
+	test_fs.cpp \
+	test_fs_links.cpp
 
 win*|linux*|mac*:SOURCES += test_directory_watcher.cpp
 
@@ -113,4 +114,5 @@ win*:SOURCES += \
 	test_windows_path.cpp
 
 HEADERS += catch_thin_io.hpp \
+	test_reparse_win.hpp \
 	test_volume.hpp

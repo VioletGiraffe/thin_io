@@ -167,6 +167,14 @@ struct StringMaker<thin_io::filesystem_space> {
 };
 
 template<>
+struct StringMaker<thin_io::link_definition> {
+	static std::string convert(const thin_io::link_definition& definition)
+	{
+		return "{ type: " + std::to_string(static_cast<int>(definition.type)) + ", target: " + Detail::stringify(definition.target) + " }";
+	}
+};
+
+template<>
 struct StringMaker<thin_io::filesystem_error> {
 	static std::string convert(const thin_io::filesystem_error& error)
 	{

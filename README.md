@@ -146,6 +146,17 @@ disappears at once even while another process holds the entry open.
 `set_permissions()` applies a `file_permissions` value by path, with the same explicit `link_behavior`. With
 `do_not_follow` a link's target is never changed. On Windows only the read-only, hidden and system attributes change.
 
+### Links
+
+`read_link()` reports what a link stores as a `link_definition`, and `create_link()` creates a new link from one, so a
+link can be copied as itself. The target is kept exactly as stored, never resolved: a relative target stays relative.
+`set_times()` with `do_not_follow` sets the link's own timestamps.
+
+- Windows definitions are file symbolic links, directory symbolic links, and junctions to a directory path. The target
+  is the print name. Volume mount points and other name-surrogate reparse points cannot be read as a definition.
+- Creating a Windows symbolic link needs Developer Mode or the symbolic-link privilege. A junction needs neither, but
+  holds only an absolute local path.
+
 ### Filesystem space
 
 `get_filesystem_space()` accepts a directory path, follows symbolic links and reparse points, and reports the space
