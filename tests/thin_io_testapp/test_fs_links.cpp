@@ -310,7 +310,7 @@ TEST_CASE("set_times rejects a link behavior outside the enum", "[fs][link]")
 
 TEST_CASE("create_link fails on a filesystem without links and leaves nothing behind", "[fs][link]")
 {
-	if (!test_volume::isFatFamily())
+	if (test_volume::storesSymbolicLinks())
 		return;
 
 	static constexpr char targetPath[] = "no-links-target.dir";
@@ -329,6 +329,32 @@ TEST_CASE("create_link fails on a filesystem without links and leaves nothing be
 
 	REQUIRE(remove_entry(targetPath));
 }
+
+#ifdef __APPLE__
+
+TEST_CASE("macOS create_link and read_link round-trip a symbolic link on FAT and exFAT", "[fs][link][macos]")
+{
+	if (!test_volume::isFatFamily())
+		return;
+
+	static constexpr char targetPath[] = "emulated-link-target.file";
+	static constexpr char linkPath[] = "emulated-link.file";
+	(void)remove_entry(linkPath);
+	(void)remove_entry(targetPath);
+	REQUIRE(createEmptyFile(targetPath));
+
+	const link_definition definition{ .type = link_type::symbolic_link, .target = "emulated-link-target.file" };
+	REQUIRE(create_link(linkPath, definition));
+	const auto status = get_entry_status(linkPath, link_behavior::do_not_follow);
+	REQUIRE(status);
+	CHECK(status->attributes.is_link);
+	CHECK(read_link(linkPath) == definition);
+
+	REQUIRE(remove_entry(linkPath));
+	REQUIRE(remove_entry(targetPath));
+}
+
+#endif
 
 TEST_CASE("set_times without following changes the link's own times and leaves its target", "[fs][link]")
 {

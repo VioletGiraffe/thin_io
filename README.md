@@ -156,6 +156,8 @@ link can be copied as itself. The target is kept exactly as stored, never resolv
   is the print name. Volume mount points and other name-surrogate reparse points cannot be read as a definition.
 - Creating a Windows symbolic link needs Developer Mode or the symbolic-link privilege. A junction needs neither, but
   holds only an absolute local path.
+- FAT32 and exFAT hold no links, so `create_link()` fails there. macOS is the exception: it emulates symbolic links on
+  them, storing each as a regular file in the XSym format.
 
 ### Filesystem space
 
@@ -209,6 +211,6 @@ Limits:
   files for its target platform.
 - `scripts/run_tests.bat` and `scripts/run_tests.sh` build the tests with CMake and run them, as CI does. A first
   argument of `build` or `nobuild` does only one of the two. Each further argument is a directory to run them in as well: the tests create their entries in the current directory and skip
-  what its filesystem cannot store, such as links and exact timestamps on FAT32 and exFAT.
+  what its filesystem cannot store, such as hard links and exact timestamps on FAT32 and exFAT.
 - Depends on the header-only [cpp-template-utils](https://github.com/VioletGiraffe/cpp-template-utils), checked out
   beside thin_io as `../cpp-template-utils`. Its Catch2 copy is used by the tests.

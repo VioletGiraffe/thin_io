@@ -68,7 +68,7 @@ enum class filesystem_kind {
 
 // The ...Unsupported() functions warn when they return true: the caller only has to return.
 
-// Hard links, symbolic links and junctions.
+// Hard links, symbolic links and junctions. Skips the FAT and exFAT symbolic links macOS emulates as well.
 [[nodiscard]] inline bool linksUnsupported()
 {
 	if (!isFatFamily())
@@ -76,6 +76,16 @@ enum class filesystem_kind {
 
 	WARN("This filesystem has no links: test skipped");
 	return true;
+}
+
+// macOS emulates symbolic links on FAT and exFAT.
+[[nodiscard]] inline bool storesSymbolicLinks() noexcept
+{
+#ifdef __APPLE__
+	return true;
+#else
+	return !isFatFamily();
+#endif
 }
 
 // POSIX permission bits. The Windows attributes exist on every filesystem.
