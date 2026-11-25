@@ -25,7 +25,8 @@
 #endif
 
 #ifdef __APPLE__
-#include <sys/attr.h> // setattrlist, ATTR_CMN_CRTIME
+#include <strings.h>  // strncasecmp
+#include <sys/attr.h> // getattrlist, setattrlist, ATTR_CMN_CRTIME, ATTR_CMN_NAME
 #endif
 
 namespace thin_io {
@@ -45,6 +46,27 @@ namespace {
 		return {};
 	}
 }
+
+#ifdef __APPLE__
+// The entry's name as its volume stores it: a case-insensitive volume finds the entry under any case. Empty on failure.
+[[nodiscard]] std::optional<std::string> storedName(const char* const path)
+{
+	attrlist request{};
+	request.bitmapcount = ATTR_BIT_MAP_COUNT;
+	request.commonattr = ATTR_CMN_NAME;
+
+	struct __attribute__((aligned(4), packed)) {
+		uint32_t length;
+		attrreference_t name;
+		char data[1024]; // 255 UTF-16 units of an HFS+ or APFS name, as UTF-8
+	} reply;
+	if (::getattrlist(path, &request, &reply, sizeof(reply), FSOPT_NOFOLLOW) != 0)
+		return {};
+
+	const char* const name = reinterpret_cast<const char*>(&reply.name) + reply.name.attr_dataoffset;
+	return std::string{ name, ::strnlen(name, reply.name.attr_length) };
+}
+#endif
 
 } // namespace
 
@@ -468,7 +490,15 @@ filesystem_result<directory_entry> get_directory_entry(const char* const path)
 	directory_entry entry;
 	static_cast<entry_status&>(entry) = std::move(*status);
 	if (pathView != "/")
+	{
 		entry.name = pathView.substr(pathView.find_last_of('/') + 1); // npos + 1 is 0: the whole path is the name
+#ifdef __APPLE__
+		// Only a respelling in case: a mounted volume's root reports the volume's name
+		if (auto stored = storedName(entryPath.c_str()); stored && stored->size() == entry.name.size()
+			&& ::strncasecmp(stored->data(), entry.name.data(), stored->size()) == 0)
+			entry.name = std::move(*stored);
+#endif
+	}
 	if (entry.attributes.is_link)
 	{
 		if (auto target = statusAt(AT_FDCWD, entryPath.c_str(), link_behavior::follow))

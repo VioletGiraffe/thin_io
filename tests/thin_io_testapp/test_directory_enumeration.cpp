@@ -308,6 +308,25 @@ TEST_CASE("get_directory_entry reports one entry as a full listing does", "[fs][
 	REQUIRE(removeDirectory(directoryPath));
 }
 
+#if defined _WIN32 || defined __APPLE__
+TEST_CASE("get_directory_entry reports the stored spelling of a name asked for in another case", "[fs][directory]")
+{
+	static constexpr char directoryPath[] = "directory-entry-case";
+	static constexpr char filePath[] = "directory-entry-case/Stored.bin";
+	file::delete_file(filePath);
+	removeDirectory(directoryPath);
+	REQUIRE(createDirectory(directoryPath));
+	REQUIRE(createFileWithContents(filePath, {}));
+
+	const auto respelled = get_directory_entry("directory-entry-case/sTORED.BIN");
+	if (respelled) // Absent on a case-sensitive volume
+		CHECK(respelled->name == asciiName("Stored.bin"));
+
+	REQUIRE(file::delete_file(filePath));
+	REQUIRE(removeDirectory(directoryPath));
+}
+#endif
+
 #ifndef _WIN32
 TEST_CASE("POSIX directory enumeration identifies links and other entries", "[fs][directory][link]")
 {

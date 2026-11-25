@@ -45,7 +45,9 @@ namespace thin_io {
 
 // Reports one entry as list_directory() does with listing_detail::full, without opening it: works for entries that
 // cannot be opened, such as a Windows paging file. A trailing separator is ignored.
-// name is empty for a root. Otherwise it is the path's last component on POSIX, and the filesystem's spelling on Windows.
+// name is empty for a root. Otherwise it is the filesystem's spelling on Windows, and the path's last component on POSIX:
+// - macOS: in the stored case where only ASCII case differs;
+// - Linux has no call for the spelling: a case-insensitive volume, such as FAT, returns the name in the case asked for.
 // Windows: wildcard characters in the name fail.
 // Windows, parent not listable: name is the path's last component, and a reparse point must be openable.
 [[nodiscard]] filesystem_result<directory_entry> get_directory_entry(const char* path);
