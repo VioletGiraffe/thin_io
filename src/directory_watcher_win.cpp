@@ -1,4 +1,5 @@
 #include "directory_watcher.hpp"
+#include "fs.hpp"
 #include "handle_win.hpp"
 #include "windows_path_win.hpp"
 
@@ -9,6 +10,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -129,7 +132,23 @@ constexpr DWORD rootFilter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_D
 	return !directory.empty() && path.size() == directory.size() && hasPrefixIgnoringCase(path, directory);
 }
 
+[[nodiscard]] bool isSameOrUnder(const std::wstring_view path, const std::wstring_view directory) noexcept
+{
+	return isSameDirectory(path, directory) || isUnder(path, directory);
+}
+
+[[nodiscard]] native_string joinedRelativePath(const std::wstring_view directory, const std::wstring_view name)
+{
+	if (directory.empty())
+		return native_string{ name };
+	native_string path{ directory };
+	path += L'\\';
+	path += name;
+	return path;
+}
+
 DWORD CALLBACK onVolumeEvent(HCMNOTIFICATION, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD) noexcept;
+DWORD CALLBACK onLinkVolumeEvent(HCMNOTIFICATION, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD) noexcept;
 
 } // namespace
 
@@ -143,6 +162,7 @@ struct directory_watcher::impl {
 		DWORD bufferSize = 0;
 		bool readPending = false;
 		bool extendedInformation = false; // How the pending read was issued
+		bool extendedInformationSupported = true; // Cleared for good when the directory's filesystem rejects it
 		HCMNOTIFICATION volumeNotification = nullptr;
 
 		[[nodiscard]] bool completed() const noexcept { return readPending && HasOverlappedIoCompleted(&overlapped); }
@@ -156,12 +176,38 @@ struct directory_watcher::impl {
 
 	[[nodiscard]] filesystem_result<void> arm(watch_options options);
 	[[nodiscard]] std::optional<watch_event> drain(std::vector<watch_event>* events, bool& any);
+	// A followed directory link: its target's subtree, read through its own handle and reported under the link's path
+	struct link_watch {
+		impl* watcher = nullptr; // For the volume callback
+		native_string path; // Relative to the root
+		std::optional<entry_identity> targetId;
+		read_slot slot;
+		bool volumeReleased = false; // Its target's volume is going away: closed, and never read again
+	};
+
 	[[nodiscard]] DWORD issueRead(read_slot& slot, DWORD filter, bool subtree, bool extendedInformation) noexcept;
-	[[nodiscard]] DWORD issueRootRead() noexcept;
+	// A recursive read of every change, with the extended records where the filesystem supports them
+	[[nodiscard]] DWORD issueTreeRead(read_slot& slot, bool subtree) noexcept;
 	void processRootCompletion(std::vector<watch_event>* events, bool& any);
 	void processParentCompletion(bool& any) noexcept;
-	void appendRecords(std::vector<watch_event>& events) const;
+	// False when the link's target is gone: the caller unfollows it
+	[[nodiscard]] bool processLinkCompletion(link_watch& link, std::vector<watch_event>* events, bool& any);
+	void appendRecords(const read_slot& slot, std::wstring_view prefix, std::vector<watch_event>& events) const;
 	void appendUnlessExcluded(watch_event event, std::vector<watch_event>& events) const;
+	[[nodiscard]] bool isExcluded(std::wstring_view relativePath) const noexcept;
+	[[nodiscard]] native_string absolutePath(std::wstring_view relativePath) const;
+	// Mirrors the directory scans' cycle rule: see watch_options::follow_directory_links
+	[[nodiscard]] bool isFollowableDirectoryLink(const native_string& relativePath) const;
+	// Follows the links under relativeDirectory, which is watched already
+	void followLinksUnder(const native_string& relativeDirectory);
+	void followLink(const native_string& relativePath);
+	// relativePath and what is under it, or only what is under it. An empty path is the root.
+	void unfollowLinks(std::wstring_view relativePath, bool includingItself) noexcept;
+	// Follows the links that the events show appearing, and drops those leaving
+	void updateFollowedLinks(const std::vector<watch_event>& events);
+	// Drops the links under the excluded directories, and follows those under the directories that left the list
+	void updateFollowedLinksForExclusions(const std::vector<native_string>& previouslyExcluded);
+	void registerLinkVolumeNotification(link_watch& link) noexcept;
 	[[nodiscard]] std::optional<stop_reason> rootLossReason() const noexcept;
 	void failRoot(DWORD error) noexcept;
 	void stopWatch(stop_reason reason, filesystem_error error) noexcept;
@@ -169,47 +215,69 @@ struct directory_watcher::impl {
 	void registerVolumeNotification(read_slot& slot, HANDLE directory) noexcept;
 	// Never called under the mutex, or from the callback: unregistering waits for a running callback.
 	void unregisterVolumeNotifications() noexcept;
+	// Unregisters and destroys the links unfollowed under the mutex. Same restriction as unregisterVolumeNotifications().
+	void destroyUnfollowedLinks() noexcept;
 
 	std::mutex mutex; // Shared with the volume callback
 	std::wstring root; // Prepared and absolute; a trailing separator only on a root
 	HANDLE waitEvent = nullptr; // Manual-reset; both slots' OVERLAPPED signal it
 	watch_coverage coverage = watch_coverage::complete;
 	bool recursive = true;
+	bool followDirectoryLinks = false;
 	std::vector<native_string> excludedDirectories;
 	std::optional<entry_identity> rootId; // Of the directory rootSlot watches
-	bool extendedInformationSupported = true; // Cleared for good when the filesystem rejects it
 	read_slot rootSlot;
 	read_slot parentSlot; // Directory renames in the parent: the root's own handle never reports the root moving
+	// The root's handle never reports changes through a link. Stable addresses: the OVERLAPPED and the volume callback refer to them.
+	std::vector<std::unique_ptr<link_watch>> linkWatches;
+	std::vector<std::unique_ptr<link_watch>> unfollowedLinks; // Closed; their volume notification is still registered
+	bool volumeNotificationsRegistered = false; // arm() registers them last: until then, a followed link defers its own
 	std::optional<watch_event> pendingStop;
 	bool stopDelivered = false;
 };
 
 namespace {
 
-DWORD CALLBACK onVolumeEvent(HCMNOTIFICATION, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD) noexcept
+[[nodiscard]] bool isVolumeReleaseEvent(const CM_NOTIFY_ACTION action, const PCM_NOTIFY_EVENT_DATA eventData) noexcept
 {
-	bool releasing = false;
 	switch (action)
 	{
 	case CM_NOTIFY_ACTION_DEVICEQUERYREMOVE:
 	case CM_NOTIFY_ACTION_DEVICEREMOVEPENDING:
 	case CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE:
-		releasing = true;
-		break;
+		return true;
 	case CM_NOTIFY_ACTION_DEVICECUSTOMEVENT:
 		// Safely Remove of removable media locks the volume and sends no query-remove.
-		releasing = eventData != nullptr && (::IsEqualGUID(eventData->u.DeviceHandle.EventGuid, GUID_IO_VOLUME_LOCK)
+		return eventData != nullptr && (::IsEqualGUID(eventData->u.DeviceHandle.EventGuid, GUID_IO_VOLUME_LOCK)
 			|| ::IsEqualGUID(eventData->u.DeviceHandle.EventGuid, GUID_IO_VOLUME_DISMOUNT));
-		break;
 	default:
-		break;
+		return false;
 	}
+}
 
-	if (releasing)
+DWORD CALLBACK onVolumeEvent(HCMNOTIFICATION, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD) noexcept
+{
+	if (isVolumeReleaseEvent(action, eventData))
 	{
 		auto& watcher = *static_cast<directory_watcher::impl*>(context);
 		std::lock_guard lock{ watcher.mutex };
 		watcher.stopWatch(stop_reason::volume_released, {});
+	}
+
+	return ERROR_SUCCESS; // Never vetoes the removal
+}
+
+// A followed link's target volume going away closes that link alone: the root's volume stays
+
+DWORD CALLBACK onLinkVolumeEvent(HCMNOTIFICATION, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA eventData, DWORD) noexcept
+{
+	if (isVolumeReleaseEvent(action, eventData))
+	{
+		auto& link = *static_cast<directory_watcher::impl::link_watch*>(context);
+		std::lock_guard lock{ link.watcher->mutex };
+		link.watcher->closeSlot(link.slot);
+		link.volumeReleased = true;
+		::SetEvent(link.watcher->waitEvent); // The owner then marks the coverage partial
 	}
 
 	return ERROR_SUCCESS; // Never vetoes the removal
@@ -223,9 +291,11 @@ directory_watcher::impl::~impl()
 		std::lock_guard lock{ mutex };
 		closeSlot(rootSlot);
 		closeSlot(parentSlot);
+		unfollowLinks({}, true);
 	}
 
 	unregisterVolumeNotifications();
+	destroyUnfollowedLinks();
 	if (waitEvent != nullptr)
 		::CloseHandle(waitEvent);
 }
@@ -233,6 +303,7 @@ directory_watcher::impl::~impl()
 filesystem_result<void> directory_watcher::impl::arm(watch_options options)
 {
 	recursive = options.recursive;
+	followDirectoryLinks = options.recursive && options.follow_directory_links;
 	excludedDirectories = normalizedRelativeDirectories(std::move(options.excluded_directories));
 
 	waitEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -272,7 +343,7 @@ filesystem_result<void> directory_watcher::impl::arm(watch_options options)
 
 	// From the handle itself, so the identity is exactly that of the watched directory.
 	rootId = knownIdentity(rootSlot.directory);
-	if (const DWORD error = issueRootRead(); error != ERROR_SUCCESS) [[unlikely]]
+	if (const DWORD error = issueTreeRead(rootSlot, recursive); error != ERROR_SUCCESS) [[unlikely]]
 		return std::unexpected{ filesystem_error{ .native_code = error } };
 	// Issuing the root's read cleared the event the parent's read may already have set.
 	if (parentSlot.completed())
@@ -281,12 +352,22 @@ filesystem_result<void> directory_watcher::impl::arm(watch_options options)
 	// A network share's notifications come from its server and include every client's changes.
 	coverage = rootTracked ? watch_coverage::complete : watch_coverage::partial;
 
+	// After the root's read is issued, so a link made during the walk is reported, or found by it
+	if (followDirectoryLinks)
+		followLinksUnder({});
+
 	// Last: the callback may run as soon as one registration exists, and close both handles.
 	// So both are read first; registering a handle it already closed fails, or reaches an already stopped watch.
 	const HANDLE rootDirectory = rootSlot.directory;
 	const HANDLE parentDirectory = parentSlot.directory;
 	registerVolumeNotification(rootSlot, rootDirectory);
 	registerVolumeNotification(parentSlot, parentDirectory);
+	{
+		std::lock_guard lock{ mutex };
+		volumeNotificationsRegistered = true;
+		for (const auto& link : linkWatches)
+			registerLinkVolumeNotification(*link);
+	}
 	return {};
 }
 
@@ -305,27 +386,53 @@ DWORD directory_watcher::impl::issueRead(read_slot& slot, const DWORD filter, co
 	return ERROR_SUCCESS;
 }
 
-DWORD directory_watcher::impl::issueRootRead() noexcept
+DWORD directory_watcher::impl::issueTreeRead(read_slot& slot, const bool subtree) noexcept
 {
-	if (extendedInformationSupported)
+	if (slot.extendedInformationSupported)
 	{
-		const DWORD error = issueRead(rootSlot, rootFilter, recursive, true);
+		const DWORD error = issueRead(slot, rootFilter, subtree, true);
 		if (!isUnsupported(error))
 			return error;
-		extendedInformationSupported = false;
+		slot.extendedInformationSupported = false;
 	}
 
-	return issueRead(rootSlot, rootFilter, recursive, false);
+	return issueRead(slot, rootFilter, subtree, false);
 }
 
 std::optional<watch_event> directory_watcher::impl::drain(std::vector<watch_event>* const events, bool& any)
 {
 	if (!stopDelivered && !pendingStop)
 	{
+		// Following links needs the events even when the caller discards them
+		std::vector<watch_event> received;
+		std::vector<watch_event>* const target = events != nullptr || followDirectoryLinks ? &received : nullptr;
 		if (rootSlot.completed())
-			processRootCompletion(events, any);
+			processRootCompletion(target, any);
 		if (!pendingStop && parentSlot.completed())
 			processParentCompletion(any);
+
+		// A target lost with its volume reports nothing: a listing through the link would touch the volume during an eject
+		std::vector<native_string> lostTargets;
+		for (const auto& link : linkWatches)
+		{
+			if (pendingStop)
+				break;
+			if (link->volumeReleased || (link->slot.completed() && !processLinkCompletion(*link, target, any)))
+				lostTargets.push_back(link->path);
+		}
+
+		if (!pendingStop)
+		{
+			for (const native_string& path : lostTargets)
+				unfollowLinks(path, true);
+			if (!lostTargets.empty())
+				coverage = watch_coverage::partial; // Nothing follows the links again if their targets come back
+			if (followDirectoryLinks)
+				updateFollowedLinks(received);
+		}
+
+		if (events != nullptr)
+			std::ranges::move(received, std::back_inserter(*events));
 	}
 
 	// Reset before the re-check: a read completing after it signals again.
@@ -337,7 +444,7 @@ std::optional<watch_event> directory_watcher::impl::drain(std::vector<watch_even
 		return std::exchange(pendingStop, std::nullopt);
 	}
 
-	if (rootSlot.completed() || parentSlot.completed())
+	if (rootSlot.completed() || parentSlot.completed() || std::ranges::any_of(linkWatches, [](const auto& link) { return link->slot.completed(); }))
 		::SetEvent(waitEvent);
 	return {};
 }
@@ -356,10 +463,10 @@ void directory_watcher::impl::processRootCompletion(std::vector<watch_event>* co
 		if (events != nullptr && (!succeeded || bytes == 0))
 			events->push_back(watch_event{ .kind = watch_event_kind::overflow });
 		else if (events != nullptr)
-			appendRecords(*events);
+			appendRecords(rootSlot, {}, *events);
 	}
 	else if (rootSlot.extendedInformation && isUnsupported(error))
-		extendedInformationSupported = false;
+		rootSlot.extendedInformationSupported = false;
 	// ERROR_OPERATION_ABORTED: the thread that issued the read exited. A release never gets here: closeSlot() waits out its own cancel.
 	// The handle keeps the changes between reads, so re-issuing loses nothing.
 	else if (error != ERROR_OPERATION_ABORTED)
@@ -368,8 +475,39 @@ void directory_watcher::impl::processRootCompletion(std::vector<watch_event>* co
 		return;
 	}
 
-	if (const DWORD issueError = issueRootRead(); issueError != ERROR_SUCCESS)
+	if (const DWORD issueError = issueTreeRead(rootSlot, recursive); issueError != ERROR_SUCCESS)
 		failRoot(issueError);
+}
+
+bool directory_watcher::impl::processLinkCompletion(link_watch& link, std::vector<watch_event>* const events, bool& any)
+{
+	DWORD bytes = 0;
+	const bool succeeded = ::GetOverlappedResult(link.slot.directory, &link.slot.overlapped, &bytes, FALSE) != 0;
+	const DWORD error = succeeded ? ERROR_SUCCESS : ::GetLastError();
+	link.slot.readPending = false;
+
+	// The same as the root's, except that a failure means the target is gone or unreadable: the link alone is lost
+	bool targetLost = false;
+	if (succeeded || error == ERROR_NOTIFY_ENUM_DIR)
+	{
+		any = true;
+		if (events != nullptr && (!succeeded || bytes == 0))
+			events->push_back(watch_event{ .kind = watch_event_kind::overflow, .path = link.path });
+		else if (events != nullptr)
+			appendRecords(link.slot, link.path, *events);
+	}
+	else if (link.slot.extendedInformation && isUnsupported(error))
+		link.slot.extendedInformationSupported = false;
+	else if (error != ERROR_OPERATION_ABORTED)
+		targetLost = true;
+
+	if (!targetLost && issueTreeRead(link.slot, true) == ERROR_SUCCESS)
+		return true;
+
+	any = true;
+	if (events != nullptr)
+		events->push_back(watch_event{ .kind = watch_event_kind::overflow, .path = link.path });
+	return false;
 }
 
 void directory_watcher::impl::processParentCompletion(bool& any) noexcept
@@ -392,9 +530,9 @@ void directory_watcher::impl::processParentCompletion(bool& any) noexcept
 	}
 }
 
-void directory_watcher::impl::appendRecords(std::vector<watch_event>& events) const
+void directory_watcher::impl::appendRecords(const read_slot& slot, const std::wstring_view prefix, std::vector<watch_event>& events) const
 {
-	const auto* const records = reinterpret_cast<const std::byte*>(rootSlot.buffer.get());
+	const auto* const records = reinterpret_cast<const std::byte*>(slot.buffer.get());
 	std::optional<watch_event> renameSource; // An old name waiting for its new name
 
 	const auto flushRenameSource = [&] {
@@ -409,7 +547,7 @@ void directory_watcher::impl::appendRecords(std::vector<watch_event>& events) co
 		DWORD action = 0;
 		std::wstring_view name;
 		entry_kind kind = entry_kind::unknown;
-		if (rootSlot.extendedInformation)
+		if (slot.extendedInformation)
 		{
 			const auto& record = *reinterpret_cast<const FILE_NOTIFY_EXTENDED_INFORMATION*>(records + offset);
 			nextOffset = record.NextEntryOffset;
@@ -431,27 +569,27 @@ void directory_watcher::impl::appendRecords(std::vector<watch_event>& events) co
 		switch (action)
 		{
 		case FILE_ACTION_ADDED:
-			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = native_string{ name } }, events);
+			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = joinedRelativePath(prefix, name) }, events);
 			break;
 		case FILE_ACTION_REMOVED:
-			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = native_string{ name } }, events);
+			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = joinedRelativePath(prefix, name) }, events);
 			break;
 		case FILE_ACTION_MODIFIED:
-			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = native_string{ name } }, events);
+			appendUnlessExcluded(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = joinedRelativePath(prefix, name) }, events);
 			break;
 		case FILE_ACTION_RENAMED_OLD_NAME:
-			renameSource = watch_event{ .kind = watch_event_kind::renamed, .entry = kind, .old_path = native_string{ name } };
+			renameSource = watch_event{ .kind = watch_event_kind::renamed, .entry = kind, .old_path = joinedRelativePath(prefix, name) };
 			break;
 		case FILE_ACTION_RENAMED_NEW_NAME:
 			if (renameSource)
 			{
 				renameSource->entry = kind;
-				renameSource->path = native_string{ name };
+				renameSource->path = joinedRelativePath(prefix, name);
 				appendUnlessExcluded(std::move(*renameSource), events);
 				renameSource.reset();
 			}
 			else
-				appendUnlessExcluded(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = native_string{ name } }, events);
+				appendUnlessExcluded(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = joinedRelativePath(prefix, name) }, events);
 			break;
 		default:
 			break;
@@ -531,8 +669,203 @@ void directory_watcher::impl::stopWatch(const stop_reason reason, const filesyst
 
 	closeSlot(rootSlot);
 	closeSlot(parentSlot);
+	unfollowLinks({}, true);
 	pendingStop = watch_event{ .kind = watch_event_kind::stopped, .reason = reason, .error = error };
 	::SetEvent(waitEvent);
+}
+
+bool directory_watcher::impl::isExcluded(const std::wstring_view relativePath) const noexcept
+{
+	return std::ranges::any_of(excludedDirectories, [relativePath](const native_string& directory) { return isSameOrUnder(relativePath, directory); });
+}
+
+native_string directory_watcher::impl::absolutePath(const std::wstring_view relativePath) const
+{
+	if (relativePath.empty())
+		return root;
+	return root.ends_with(L'\\') ? root + native_string{ relativePath } : root + L'\\' + native_string{ relativePath };
+}
+
+bool directory_watcher::impl::isFollowableDirectoryLink(const native_string& relativePath) const
+{
+	const native_string linkPath = absolutePath(relativePath);
+	const auto link = get_entry_status(linkPath.c_str(), link_behavior::do_not_follow);
+	if (!link || !link->attributes.is_link)
+		return false;
+
+	const auto target = get_entry_metadata(linkPath.c_str(), link_behavior::follow);
+	if (!target || target->attributes.kind != entry_kind::directory || !target->identity)
+		return false;
+
+	// From the link's parent up to the root
+	for (std::wstring_view directory = relativePath; !directory.empty();)
+	{
+		const size_t separator = directory.find_last_of(L'\\');
+		directory = separator == std::wstring_view::npos ? std::wstring_view{} : directory.substr(0, separator);
+		const auto onPath = get_entry_metadata(absolutePath(directory).c_str(), link_behavior::follow);
+		if (onPath && onPath->identity == target->identity)
+			return false;
+	}
+
+	return true;
+}
+
+void directory_watcher::impl::followLinksUnder(const native_string& relativeDirectory)
+{
+	const auto entries = list_directory(absolutePath(relativeDirectory).c_str(), listing_detail::basic);
+	if (!entries)
+		return;
+
+	for (const directory_entry& entry : *entries)
+	{
+		// A Windows directory link reports its own directory bit
+		if (entry.attributes.kind != entry_kind::directory)
+			continue;
+
+		const native_string path = joinedRelativePath(relativeDirectory, entry.name);
+		if (isExcluded(path))
+			continue;
+
+		if (!entry.attributes.is_link)
+			followLinksUnder(path);
+		else if (isFollowableDirectoryLink(path))
+			followLink(path);
+	}
+}
+
+void directory_watcher::impl::followLink(const native_string& relativePath)
+{
+	if (isExcluded(relativePath))
+		return;
+
+	// Events and walks can both reach one link: one already followed to the same target keeps its handle and what it holds.
+	// A link replaced in place has another target.
+	const auto target = get_entry_metadata(absolutePath(relativePath).c_str(), link_behavior::follow);
+	if (target && target->identity && std::ranges::any_of(linkWatches, [&](const auto& link) {
+		return isSameDirectory(link->path, relativePath) && link->targetId == target->identity;
+	}))
+		return;
+	unfollowLinks(relativePath, true);
+
+	auto link = std::make_unique<link_watch>();
+	link->watcher = this;
+	link->path = relativePath;
+	link->slot.overlapped.hEvent = waitEvent;
+	link->slot.bufferSize = rootBufferSize;
+	link->slot.buffer = std::make_unique<uint64_t[]>(rootBufferSize / sizeof(uint64_t));
+	// Opened through the link: the handle is the target directory's
+	link->slot.directory = openDirectoryForWatching(absolutePath(relativePath));
+	if (link->slot.directory == INVALID_HANDLE_VALUE || issueTreeRead(link->slot, true) != ERROR_SUCCESS)
+	{
+		closeSlot(link->slot);
+		coverage = watch_coverage::partial;
+		return;
+	}
+	link->targetId = knownIdentity(link->slot.directory);
+
+	if (volumeNotificationsRegistered)
+		registerLinkVolumeNotification(*link);
+	linkWatches.push_back(std::move(link));
+	followLinksUnder(relativePath);
+}
+
+void directory_watcher::impl::unfollowLinks(const std::wstring_view relativePath, const bool includingItself) noexcept
+{
+	const auto unfollowed = std::partition(linkWatches.begin(), linkWatches.end(), [&](const auto& link) {
+		return !relativePath.empty() && !isUnder(link->path, relativePath) && !(includingItself && isSameDirectory(link->path, relativePath));
+	});
+
+	for (auto link = unfollowed; link != linkWatches.end(); ++link)
+	{
+		closeSlot((*link)->slot);
+		unfollowedLinks.push_back(std::move(*link));
+	}
+	linkWatches.erase(unfollowed, linkWatches.end());
+}
+
+void directory_watcher::impl::updateFollowedLinks(const std::vector<watch_event>& events)
+{
+	// A directory that appears may be a link, or hold some
+	const auto appeared = [this](const native_string& path) {
+		if (isFollowableDirectoryLink(path))
+		{
+			followLink(path);
+			return;
+		}
+
+		unfollowLinks(path, true); // What appeared may have replaced a followed link
+		if (const auto status = get_entry_status(absolutePath(path).c_str(), link_behavior::do_not_follow); status && status->attributes.kind == entry_kind::directory && !status->attributes.is_link)
+			followLinksUnder(path);
+	};
+
+	for (const watch_event& event : events)
+	{
+		switch (event.kind)
+		{
+		case watch_event_kind::created:
+			if (event.entry != entry_kind::regular_file)
+				appeared(event.path);
+			break;
+		case watch_event_kind::removed:
+			unfollowLinks(event.path, true);
+			break;
+		case watch_event_kind::renamed:
+			unfollowLinks(event.old_path, true);
+			if (event.entry != entry_kind::regular_file)
+				appeared(event.path);
+			break;
+		case watch_event_kind::overflow: // Links may have come and gone unreported; a lost link's target is not walked
+			unfollowLinks(event.path, false);
+			if (event.path.empty() || std::ranges::any_of(linkWatches, [&event](const auto& link) { return isSameDirectory(link->path, event.path); }))
+				followLinksUnder(event.path);
+			break;
+		default:
+			break;
+		}
+	}
+}
+
+void directory_watcher::impl::updateFollowedLinksForExclusions(const std::vector<native_string>& previouslyExcluded)
+{
+	for (const native_string& directory : excludedDirectories)
+		unfollowLinks(directory, true);
+
+	for (const native_string& directory : previouslyExcluded)
+	{
+		if (directory.empty() || isExcluded(directory))
+			continue;
+		if (isFollowableDirectoryLink(directory))
+			followLink(directory);
+		else
+			followLinksUnder(directory);
+	}
+}
+
+// Requires the mutex. Fails, as registerVolumeNotification() does, for a target with no removable device behind it.
+void directory_watcher::impl::registerLinkVolumeNotification(link_watch& link) noexcept
+{
+	CM_NOTIFY_FILTER filter{};
+	filter.cbSize = sizeof(filter);
+	filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
+	filter.u.DeviceHandle.hTarget = link.slot.directory;
+	if (::CM_Register_Notification(&filter, &link, onLinkVolumeEvent, &link.slot.volumeNotification) != CR_SUCCESS)
+		link.slot.volumeNotification = nullptr;
+}
+
+void directory_watcher::impl::destroyUnfollowedLinks() noexcept
+{
+	std::vector<std::unique_ptr<link_watch>> unfollowed;
+	{
+		std::lock_guard lock{ mutex };
+		unfollowed = std::move(unfollowedLinks);
+		unfollowedLinks.clear();
+	}
+
+	for (const auto& link : unfollowed)
+	{
+		if (link->slot.volumeNotification != nullptr)
+			::CM_Unregister_Notification(link->slot.volumeNotification);
+	}
 }
 
 // Requires the mutex
@@ -643,9 +976,12 @@ filesystem_result<std::vector<watch_event>> directory_watcher::read_events()
 
 	std::vector<watch_event> events;
 	bool any = false;
-	std::lock_guard lock{ _impl->mutex };
-	if (auto stop = _impl->drain(&events, any))
-		events.push_back(std::move(*stop));
+	{
+		std::lock_guard lock{ _impl->mutex };
+		if (auto stop = _impl->drain(&events, any))
+			events.push_back(std::move(*stop));
+	}
+	_impl->destroyUnfollowedLinks();
 	return events;
 }
 
@@ -655,8 +991,11 @@ filesystem_result<discarded_events> directory_watcher::discard_events()
 		return std::unexpected{ filesystem_error{ .native_code = ERROR_INVALID_HANDLE } };
 
 	discarded_events discarded;
-	std::lock_guard lock{ _impl->mutex };
-	discarded.stop = _impl->drain(nullptr, discarded.any);
+	{
+		std::lock_guard lock{ _impl->mutex };
+		discarded.stop = _impl->drain(nullptr, discarded.any);
+	}
+	_impl->destroyUnfollowedLinks();
 	return discarded;
 }
 
@@ -687,8 +1026,13 @@ void directory_watcher::set_excluded_directories(std::vector<native_string> dire
 		return;
 
 	auto normalized = normalizedRelativeDirectories(std::move(directories));
-	std::lock_guard lock{ _impl->mutex };
-	_impl->excludedDirectories = std::move(normalized);
+	{
+		std::lock_guard lock{ _impl->mutex };
+		const std::vector<native_string> previous = std::exchange(_impl->excludedDirectories, std::move(normalized));
+		if (_impl->followDirectoryLinks && !_impl->pendingStop && !_impl->stopDelivered)
+			_impl->updateFollowedLinksForExclusions(previous);
+	}
+	_impl->destroyUnfollowedLinks();
 }
 
 void directory_watcher::release() noexcept
@@ -701,6 +1045,7 @@ void directory_watcher::release() noexcept
 		_impl->stopWatch(stop_reason::volume_released, {});
 	}
 	_impl->unregisterVolumeNotifications();
+	_impl->destroyUnfollowedLinks();
 }
 
 filesystem_result<waker> waker::create()

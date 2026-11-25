@@ -9,6 +9,7 @@
 #include <chrono>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <stdlib.h>
 #include <string>
@@ -18,6 +19,8 @@
 #include <vector>
 
 #ifdef _WIN32
+#include "test_reparse_win.hpp"
+
 #include <Windows.h>
 #else
 #include <unistd.h>
@@ -166,6 +169,21 @@ private:
 {
 	writeFile(tree.path(marker), {});
 	return readUntilEvent(watcher, watch_event_kind::created, marker);
+}
+
+// A junction on Windows, which needs no privilege; a symbolic link to the absolute target elsewhere
+[[nodiscard]] bool createDirectoryLink(const native_string& linkPath, const native_string& targetPath)
+{
+#ifdef _WIN32
+	return createJunction(linkPath.c_str(), targetPath.c_str());
+#else
+	char* const target = ::realpath(targetPath.c_str(), nullptr);
+	if (target == nullptr)
+		return false;
+	const bool created = ::symlink(target, linkPath.c_str()) == 0;
+	::free(target);
+	return created;
+#endif
 }
 
 [[nodiscard]] directory_watcher watchTree(const native_string& root, watch_options options = {})
@@ -711,6 +729,136 @@ TEST_CASE("POSIX: directory_watcher watches a root reached through a symbolic li
 	CHECK(stopEvent(events) == nullptr);
 }
 #endif
+
+TEST_CASE("A directory_watcher following links reports a change in a link's target at the link's path", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree outside{ "watcher-link-outside" };
+	REQUIRE(create_directory(outside.path("target").c_str()));
+	scratch_tree tree{ "watcher-link-followed" };
+	REQUIRE(createDirectoryLink(tree.path("link"), outside.path("target")));
+
+	directory_watcher watcher = watchTree(tree.root(), { .follow_directory_links = true });
+	writeFile(outside.path("target/a.txt"), "x");
+	(void)readUntilEvent(watcher, watch_event_kind::created, "link/a.txt");
+
+	REQUIRE(create_directory(outside.path("target/sub").c_str()));
+	writeFile(outside.path("target/sub/b.txt"), "x");
+	(void)readUntilEvent(watcher, watch_event_kind::created, "link/sub/b.txt");
+}
+
+TEST_CASE("A directory_watcher following links reports a change in a target inside the tree at both paths", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree tree{ "watcher-link-alias" };
+	REQUIRE(create_directory(tree.path("real").c_str()));
+	REQUIRE(createDirectoryLink(tree.path("alias"), tree.path("real")));
+
+	directory_watcher watcher = watchTree(tree.root(), { .follow_directory_links = true });
+	writeFile(tree.path("real/a.txt"), "x");
+	(void)readUntil(watcher, [](const std::vector<watch_event>& events) {
+		return hasEvent(events, watch_event_kind::created, "real/a.txt") && hasEvent(events, watch_event_kind::created, "alias/a.txt");
+	});
+}
+
+TEST_CASE("A directory_watcher following links does not follow a link to a directory on its own path", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree tree{ "watcher-link-cycle" };
+	REQUIRE(create_directory(tree.path("a").c_str()));
+	REQUIRE(createDirectoryLink(tree.path("a/up"), tree.path("a")));
+
+	directory_watcher watcher = watchTree(tree.root(), { .follow_directory_links = true });
+	writeFile(tree.path("a/x.txt"), "x");
+	(void)readUntilEvent(watcher, watch_event_kind::created, "a/x.txt");
+	const auto events = readThroughMarker(watcher, tree, "marker");
+	CHECK_FALSE(hasEventUnder(events, "a/up"));
+}
+
+TEST_CASE("A directory_watcher following links follows a link made after the watch and stops following a removed one", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree outside{ "watcher-link-later-outside" };
+	REQUIRE(create_directory(outside.path("target").c_str()));
+	scratch_tree tree{ "watcher-link-later" };
+	directory_watcher watcher = watchTree(tree.root(), { .follow_directory_links = true });
+
+	REQUIRE(createDirectoryLink(tree.path("link"), outside.path("target")));
+	(void)readUntilEvent(watcher, watch_event_kind::created, "link");
+	writeFile(outside.path("target/a.txt"), "x");
+	(void)readUntilEvent(watcher, watch_event_kind::created, "link/a.txt");
+
+	REQUIRE(remove_entry(tree.path("link").c_str()));
+	(void)readUntilEvent(watcher, watch_event_kind::removed, "link");
+	writeFile(outside.path("target/b.txt"), "x");
+	const auto events = readThroughMarker(watcher, tree, "marker");
+	CHECK_FALSE(hasEventUnder(events, "link"));
+}
+
+TEST_CASE("A directory_watcher following links reports a change once when the link appears in a new directory", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree outside{ "watcher-link-once-outside" };
+	REQUIRE(create_directory(outside.path("target").c_str()));
+	scratch_tree tree{ "watcher-link-once" };
+	directory_watcher watcher = watchTree(tree.root(), { .follow_directory_links = true });
+
+	// The directory's creation and the link's both lead to the link
+	REQUIRE(create_directory(tree.path("d").c_str()));
+	REQUIRE(createDirectoryLink(tree.path("d/link"), outside.path("target")));
+	(void)readUntilEvent(watcher, watch_event_kind::created, "d/link");
+
+	writeFile(outside.path("target/a.txt"), "x");
+	std::vector<watch_event> events = readUntilEvent(watcher, watch_event_kind::created, "d/link/a.txt");
+	std::vector<watch_event> later = readThroughMarker(watcher, tree, "marker");
+	std::ranges::move(later, std::back_inserter(events));
+	INFO(describe(events));
+	CHECK(std::ranges::count_if(events, [](const watch_event& event) {
+		return event.kind == watch_event_kind::created && event.path == native("d/link/a.txt");
+	}) == 1);
+}
+
+TEST_CASE("A directory_watcher following links reports an overflow at the link's path when its target is deleted", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree outside{ "watcher-link-lost-outside" };
+	REQUIRE(create_directory(outside.path("target").c_str()));
+	scratch_tree tree{ "watcher-link-lost" };
+	REQUIRE(createDirectoryLink(tree.path("link"), outside.path("target")));
+
+	directory_watcher watcher = watchTree(tree.root(), { .follow_directory_links = true });
+	REQUIRE(remove_entry(outside.path("target").c_str()));
+	const auto events = readUntilEvent(watcher, watch_event_kind::overflow, "link");
+	CHECK(stopEvent(events) == nullptr);
+}
+
+TEST_CASE("A directory_watcher not following links reports nothing in a link's target", "[watcher][link]")
+{
+	if (test_volume::linksUnsupported())
+		return;
+
+	scratch_tree outside{ "watcher-link-unfollowed-outside" };
+	REQUIRE(create_directory(outside.path("target").c_str()));
+	scratch_tree tree{ "watcher-link-unfollowed" };
+	REQUIRE(createDirectoryLink(tree.path("link"), outside.path("target")));
+
+	directory_watcher watcher = watchTree(tree.root());
+	writeFile(outside.path("target/a.txt"), "x");
+	const auto events = readThroughMarker(watcher, tree, "marker");
+	CHECK_FALSE(hasEventUnder(events, "link"));
+}
 
 #ifdef __linux__
 TEST_CASE("Linux: a directory that cannot be watched makes the coverage partial", "[watcher]")

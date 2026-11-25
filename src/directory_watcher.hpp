@@ -58,6 +58,14 @@ enum class watch_coverage : uint8_t {
 
 struct watch_options {
 	bool recursive = true;
+	// Recursive watches only. The subtree a directory link under the root points to is watched too, and a change in it is
+	// reported at every path through which the root reaches it. A link whose target is the root, or a directory on the
+	// link's own path, is not followed: directory scans break cycles the same way. Links made after the watch are followed.
+	// A followed link whose target is lost is followed no more, and the coverage turns partial:
+	// - a deleted or moved target reports an overflow at the link's path;
+	// - a target whose volume goes away reports nothing, so that nothing touches the volume during an eject.
+	// Windows does not notice a target moving, nor does Linux a target moving with one of its ancestors.
+	bool follow_directory_links = false;
 	// Relative to the root. Nothing under them is reported or, on Linux, watched; nor is their own modification.
 	std::vector<native_string> excluded_directories;
 	double coalescing_latency_seconds = 0.05; // FSEvents only.
@@ -80,7 +88,8 @@ struct discarded_events {
 // After the stopped event, no further events arrive and the watcher never re-arms itself: the caller re-arms by path.
 // A directory that appears is reported as created. Its entries may be reported too, one made as the directory appears
 // possibly twice: a caller that needs them lists the directory.
-// Windows: the root's parent and every further ancestor cannot be renamed while the watch is held.
+// Windows: the root's parent and every further ancestor cannot be renamed while the watch is held, nor can a followed
+// link target's ancestors.
 class directory_watcher {
 public:
 	// A relative root is resolved against the current directory once, here.

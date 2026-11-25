@@ -17,6 +17,10 @@ namespace thin_io {
 // Without trailing separators
 [[nodiscard]] std::vector<native_string> normalizedRelativeDirectories(std::vector<native_string> directories);
 
+// Whether watch_options::follow_directory_links follows the entry at relativePath under root: a link to a directory that is
+// neither the root nor a directory on the link's own path. Resolves the path's directories through links, as a scan reaches them.
+[[nodiscard]] bool isFollowableDirectoryLink(std::string_view root, std::string_view relativePath);
+
 // Appends the event unless watch_options::excluded_directories drops it:
 //   under an excluded directory - dropped;
 //   a rename across an excluded directory's boundary - a creation or a removal;

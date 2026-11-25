@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdlib.h> // realpath
 #include <strings.h> // strncasecmp
 #include <sys/mount.h> // statfs
@@ -14,7 +15,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -35,7 +38,59 @@ struct stream_event {
 	std::string relative; // To the root; empty for the root itself and for unmount, drop and RootChanged events
 	FSEventStreamEventFlags flags = 0;
 	FSEventStreamEventId id = 0;
+	// Nonzero: the followed link of this id lost its target, which moved, was deleted or went away with its volume. relative is the link.
+	uint64_t lostLinkId = 0;
 };
+
+// The part of absolutePath under one of a directory's spellings: empty for the directory itself, nothing for a path outside it.
+// A case-insensitive volume reports the case it stores, which may differ from the spelling given.
+[[nodiscard]] std::optional<std::string> pathUnder(std::string_view absolutePath, const std::vector<std::string>& spellings)
+{
+	// A directory-level event, such as MustScanSubDirs, may end in a separator.
+	while (absolutePath.size() > 1 && absolutePath.ends_with('/'))
+		absolutePath.remove_suffix(1);
+
+	for (const std::string& spelling : spellings)
+	{
+		if (spelling == "/")
+			return std::string{ absolutePath.substr(1) };
+		if (absolutePath.size() < spelling.size() || ::strncasecmp(absolutePath.data(), spelling.data(), spelling.size()) != 0)
+			continue;
+		if (absolutePath.size() == spelling.size())
+			return std::string{};
+		if (absolutePath[spelling.size()] == '/')
+			return std::string{ absolutePath.substr(spelling.size() + 1) };
+	}
+	return {};
+}
+
+// WatchRoot: a moved, deleted or replaced root or ancestor is reported as RootChanged. Null on failure.
+[[nodiscard]] FSEventStreamRef createStream(const std::string& path, const FSEventStreamCallback callback, void* const info, const double latency)
+{
+	CFStringRef watchedPath = ::CFStringCreateWithFileSystemRepresentation(nullptr, path.c_str());
+	if (watchedPath == nullptr) [[unlikely]]
+		return nullptr;
+	const CFArrayRef watchedPaths = ::CFArrayCreate(nullptr, reinterpret_cast<const void**>(&watchedPath), 1, &kCFTypeArrayCallBacks);
+	::CFRelease(watchedPath);
+	if (watchedPaths == nullptr) [[unlikely]]
+		return nullptr;
+
+	FSEventStreamContext context{ .version = 0, .info = info, .retain = nullptr, .release = nullptr, .copyDescription = nullptr };
+	const FSEventStreamRef stream = ::FSEventStreamCreate(nullptr, callback, &context, watchedPaths, kFSEventStreamEventIdSinceNow, latency,
+		kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagNoDefer);
+	::CFRelease(watchedPaths);
+	return stream;
+}
+
+// Stops a stream started on queue; afterwards no callback of it runs
+void releaseStream(const FSEventStreamRef stream, const dispatch_queue_t queue) noexcept
+{
+	::FSEventStreamStop(stream);
+	::FSEventStreamInvalidate(stream);
+	// The serial queue runs this after any callback already running, so none outlives the stream.
+	::dispatch_sync_f(queue, nullptr, [](void*) {});
+	::FSEventStreamRelease(stream);
+}
 
 [[nodiscard]] entry_kind kindFromFlags(const FSEventStreamEventFlags flags) noexcept
 {
@@ -56,6 +111,8 @@ struct stream_event {
 
 void onStreamEvents(ConstFSEventStreamRef, void* context, size_t count, void* paths, const FSEventStreamEventFlags flags[],
 	const FSEventStreamEventId ids[]) noexcept;
+void onLinkStreamEvents(ConstFSEventStreamRef, void* context, size_t count, void* paths, const FSEventStreamEventFlags flags[],
+	const FSEventStreamEventId ids[]) noexcept;
 
 } // namespace
 
@@ -67,12 +124,36 @@ struct directory_watcher::impl {
 	impl(const impl&) = delete;
 	impl& operator=(const impl&) = delete;
 
+	// A followed directory link: the root's stream never reports changes through a link, so its target has its own stream
+	struct link_stream {
+		impl* watcher = nullptr;
+		uint64_t id = 0; // Unique in the watcher: an event queued by a stream since released must not reach a newer link at the same path
+		std::optional<entry_identity> targetId;
+		std::string path; // Relative to the root
+		std::vector<std::string> targetSpellings; // As resolved, and as the volume stores it
+		FSEventStreamRef stream = nullptr;
+	};
+
 	[[nodiscard]] filesystem_result<void> arm(const char* rootPath, watch_options options);
 	// Empty for an event that can produce no watch event. Runs on the queue: reads only what arm() set before the stream started.
 	[[nodiscard]] std::optional<stream_event> relevantEvent(const char* absolutePath, FSEventStreamEventFlags flags, FSEventStreamEventId id) const;
+	// The same for a link's stream: its events are reported under the link's path
+	[[nodiscard]] static std::optional<stream_event> relevantLinkEvent(const link_stream& link, const char* absolutePath, FSEventStreamEventFlags flags,
+		FSEventStreamEventId id);
 	[[nodiscard]] std::optional<watch_event> drain(std::vector<watch_event>* events, bool& any);
 	void interpret(const std::vector<stream_event>& received, std::vector<watch_event>* events);
 	[[nodiscard]] std::optional<std::string> relativePath(std::string_view absolutePath) const;
+	// Follows the links under relativeDirectory, which is watched already
+	void followLinksUnder(const std::string& relativeDirectory);
+	void followLink(const std::string& relativePath);
+	// relativePath and what is under it, or only what is under it. An empty path is the root.
+	void unfollowLinks(std::string_view relativePath, bool includingItself) noexcept;
+	// Follows the links that the events show appearing, and drops those leaving
+	void updateFollowedLinks(const std::vector<watch_event>& events);
+	// The root, a directory, or a followed link: not a link that is not or no longer followed
+	[[nodiscard]] bool isWalkable(const std::string& relativePath) const;
+	// Drops the links under the excluded directories, and follows those under the directories that left the list
+	void updateFollowedLinksForExclusions(const std::vector<native_string>& previouslyExcluded);
 	// events: null when discarding
 	void emit(watch_event event, std::vector<watch_event>* events) const;
 	[[nodiscard]] std::optional<stop_reason> rootLossReason() const;
@@ -100,6 +181,10 @@ struct directory_watcher::impl {
 	// The spellings the stream may report the root under: as given, resolved, and as the volume stores it
 	std::vector<std::string> rootSpellings;
 	bool recursive = true;
+	bool followDirectoryLinks = false;
+	double coalescingLatency = 0;
+	std::vector<std::unique_ptr<link_stream>> linkStreams; // Stable addresses: their streams' callbacks refer to them
+	uint64_t lastLinkId = 0;
 	std::vector<native_string> excludedDirectories;
 	std::optional<entry_identity> rootId;
 	std::string mountPoint; // Of the root's volume; empty when unknown
@@ -130,6 +215,27 @@ void onStreamEvents(ConstFSEventStreamRef, void* const context, const size_t cou
 	watcher.signal();
 }
 
+void onLinkStreamEvents(ConstFSEventStreamRef, void* const context, const size_t count, void* const paths, const FSEventStreamEventFlags flags[],
+	const FSEventStreamEventId ids[]) noexcept
+{
+	const auto& link = *static_cast<const directory_watcher::impl::link_stream*>(context);
+	const auto* const absolutePaths = static_cast<const char* const*>(paths);
+
+	std::vector<stream_event> relevant;
+	for (size_t i = 0; i < count; ++i)
+	{
+		if (auto reported = directory_watcher::impl::relevantLinkEvent(link, absolutePaths[i], flags[i], ids[i]))
+			relevant.push_back(std::move(*reported));
+	}
+	if (relevant.empty())
+		return;
+
+	directory_watcher::impl& watcher = *link.watcher;
+	std::lock_guard lock{ watcher.mutex };
+	watcher.received.insert(watcher.received.end(), std::make_move_iterator(relevant.begin()), std::make_move_iterator(relevant.end()));
+	watcher.signal();
+}
+
 void onRootRevoked(void* const context) noexcept
 {
 	auto& watcher = *static_cast<directory_watcher::impl*>(context);
@@ -152,6 +258,8 @@ directory_watcher::impl::~impl()
 filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath, watch_options options)
 {
 	recursive = options.recursive;
+	followDirectoryLinks = options.recursive && options.follow_directory_links;
+	coalescingLatency = options.coalescing_latency_seconds;
 	excludedDirectories = normalizedRelativeDirectories(std::move(options.excluded_directories));
 
 	root = rootPath;
@@ -206,20 +314,7 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 			coverage = watch_coverage::partial;
 	}
 
-	CFStringRef watchedPath = ::CFStringCreateWithFileSystemRepresentation(nullptr, resolvedRoot.c_str());
-	if (watchedPath == nullptr) [[unlikely]]
-		return std::unexpected{ filesystem_error{ .native_code = ENOMEM } };
-	const CFArrayRef watchedPaths = ::CFArrayCreate(nullptr, reinterpret_cast<const void**>(&watchedPath), 1, &kCFTypeArrayCallBacks);
-	::CFRelease(watchedPath);
-	if (watchedPaths == nullptr) [[unlikely]]
-		return std::unexpected{ filesystem_error{ .native_code = ENOMEM } };
-
-	FSEventStreamContext context{ .version = 0, .info = this, .retain = nullptr, .release = nullptr, .copyDescription = nullptr };
-	// WatchRoot: a moved, deleted or replaced root or ancestor is reported as RootChanged
-	stream = ::FSEventStreamCreate(nullptr, onStreamEvents, &context, watchedPaths, kFSEventStreamEventIdSinceNow,
-		options.coalescing_latency_seconds,
-		kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagNoDefer);
-	::CFRelease(watchedPaths);
+	stream = createStream(resolvedRoot, onStreamEvents, this, coalescingLatency);
 	if (stream == nullptr) [[unlikely]]
 		return std::unexpected{ filesystem_error{ .native_code = EINVAL } };
 
@@ -241,6 +336,10 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 	::FSEventStreamSetDispatchQueue(stream, queue);
 	if (!::FSEventStreamStart(stream)) [[unlikely]]
 		return std::unexpected{ filesystem_error{ .native_code = EIO } };
+
+	// After the root's stream starts, so a link made during the walk is reported, or found by it
+	if (followDirectoryLinks)
+		followLinksUnder({});
 
 	// A replacement before the stream started went unreported.
 	if (const auto reason = rootLossReason())
@@ -268,13 +367,10 @@ void directory_watcher::impl::tearDownNotifications() noexcept
 		rootFd = -1;
 	}
 
+	unfollowLinks({}, true);
 	if (stream != nullptr)
 	{
-		::FSEventStreamStop(stream);
-		::FSEventStreamInvalidate(stream);
-		// The serial queue runs this after any callback already running, so none outlives the stream.
-		::dispatch_sync_f(queue, nullptr, [](void*) {});
-		::FSEventStreamRelease(stream);
+		releaseStream(stream, queue);
 		stream = nullptr;
 	}
 
@@ -333,7 +429,15 @@ std::optional<watch_event> directory_watcher::impl::drain(std::vector<watch_even
 	if (!batch.empty())
 		any = true;
 	if (!pendingStop)
-		interpret(batch, events);
+	{
+		// Following links needs the events even when the caller discards them
+		std::vector<watch_event> interpreted;
+		interpret(batch, events != nullptr || followDirectoryLinks ? &interpreted : nullptr);
+		if (followDirectoryLinks && !pendingStop)
+			updateFollowedLinks(interpreted);
+		if (events != nullptr)
+			std::ranges::move(interpreted, std::back_inserter(*events));
+	}
 	if (!pendingStop)
 		return {};
 
@@ -360,6 +464,19 @@ void directory_watcher::impl::interpret(const std::vector<stream_event>& batch, 
 		const stream_event& reported = batch[i];
 		const FSEventStreamEventFlags flags = reported.flags;
 
+		if (reported.lostLinkId != 0)
+		{
+			// A stream released since may have queued this
+			if (std::ranges::none_of(linkStreams, [&reported](const auto& link) { return link->id == reported.lostLinkId; }))
+				continue;
+
+			// A target lost with its volume reports nothing: a listing through the link would touch the volume during an eject
+			if ((flags & kFSEventStreamEventFlagUnmount) == 0)
+				emit(watch_event{ .kind = watch_event_kind::overflow, .path = reported.relative }, events);
+			unfollowLinks(reported.relative, true);
+			coverage = watch_coverage::partial; // Nothing follows the link again if its target comes back
+			continue;
+		}
 		if ((flags & kFSEventStreamEventFlagUnmount) != 0)
 		{
 			stopWatch(stop_reason::volume_released, {});
@@ -423,25 +540,34 @@ void directory_watcher::impl::interpret(const std::vector<stream_event>& batch, 
 	}
 }
 
-// Empty for a path outside the root. A case-insensitive volume reports the case it stores, which may differ from the root as given.
-std::optional<std::string> directory_watcher::impl::relativePath(std::string_view absolutePath) const
+// Empty for a path outside the root
+std::optional<std::string> directory_watcher::impl::relativePath(const std::string_view absolutePath) const
 {
-	// A directory-level event, such as MustScanSubDirs, may end in a separator.
-	while (absolutePath.size() > 1 && absolutePath.ends_with('/'))
-		absolutePath.remove_suffix(1);
+	return pathUnder(absolutePath, rootSpellings);
+}
 
-	for (const std::string& spelling : rootSpellings)
+std::optional<stream_event> directory_watcher::impl::relevantLinkEvent(const link_stream& link, const char* const absolutePath,
+	const FSEventStreamEventFlags flags, const FSEventStreamEventId id)
+{
+	stream_event reported{ .path = absolutePath, .relative = link.path, .flags = flags, .id = id };
+	if ((flags & (kFSEventStreamEventFlagUnmount | kFSEventStreamEventFlagRootChanged)) != 0)
 	{
-		if (spelling == "/")
-			return std::string{ absolutePath.substr(1) };
-		if (absolutePath.size() < spelling.size() || ::strncasecmp(absolutePath.data(), spelling.data(), spelling.size()) != 0)
-			continue;
-		if (absolutePath.size() == spelling.size())
-			return std::string{};
-		if (absolutePath[spelling.size()] == '/')
-			return std::string{ absolutePath.substr(spelling.size() + 1) };
+		reported.lostLinkId = link.id;
+		return reported;
 	}
-	return {};
+	if ((flags & (kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped)) != 0)
+	{
+		reported.flags = kFSEventStreamEventFlagMustScanSubDirs; // An overflow under the link's path, not the root's
+		return reported;
+	}
+
+	const auto underTarget = pathUnder(reported.path, link.targetSpellings);
+	// The target's own changes are no entry events: its loss arrives as RootChanged
+	if (!underTarget || (underTarget->empty() && (flags & kFSEventStreamEventFlagMustScanSubDirs) == 0))
+		return {};
+
+	reported.relative = joinedPath(link.path, *underTarget);
+	return reported;
 }
 
 void directory_watcher::impl::emit(watch_event event, std::vector<watch_event>* const events) const
@@ -476,6 +602,166 @@ void directory_watcher::impl::stopWatch(const stop_reason reason, const filesyst
 	pendingStop = watch_event{ .kind = watch_event_kind::stopped, .reason = reason, .error = error };
 	std::lock_guard lock{ mutex };
 	signal(); // A waiter wakes for the stop
+}
+
+void directory_watcher::impl::followLinksUnder(const std::string& relativeDirectory)
+{
+	const auto entries = list_directory(joinedPath(root, relativeDirectory).c_str(), listing_detail::basic);
+	if (!entries)
+		return;
+
+	for (const directory_entry& entry : *entries)
+	{
+		const std::string path = joinedPath(relativeDirectory, entry.name);
+		if (isExcluded(path, excludedDirectories))
+			continue;
+
+		if (entry.attributes.is_link)
+		{
+			if (isFollowableDirectoryLink(root, path))
+				followLink(path);
+		}
+		else if (entry.attributes.kind == entry_kind::directory)
+			followLinksUnder(path);
+	}
+}
+
+void directory_watcher::impl::followLink(const std::string& relativePath)
+{
+	if (isExcluded(relativePath, excludedDirectories))
+		return;
+
+	// Events and walks can both reach one link: one already followed to the same target keeps its stream.
+	// A link replaced in place has another target.
+	const auto targetMetadata = get_entry_metadata(joinedPath(root, relativePath).c_str(), link_behavior::follow);
+	const std::optional<entry_identity> targetId = targetMetadata ? targetMetadata->identity : std::nullopt;
+	if (targetId && std::ranges::any_of(linkStreams, [&](const auto& link) { return link->path == relativePath && link->targetId == targetId; }))
+		return;
+	unfollowLinks(relativePath, true);
+
+	char* const resolved = ::realpath(joinedPath(root, relativePath).c_str(), nullptr);
+	if (resolved == nullptr)
+		return;
+
+	auto link = std::make_unique<link_stream>();
+	link->watcher = this;
+	link->id = ++lastLinkId;
+	link->targetId = targetId;
+	link->path = relativePath;
+	link->targetSpellings.emplace_back(resolved);
+	::free(resolved);
+
+	const std::string target = link->targetSpellings.front(); // A copy: the spellings grow below
+	if (const int targetFd = ::open(target.c_str(), O_EVTONLY | O_CLOEXEC); targetFd >= 0)
+	{
+		char stored[MAXPATHLEN]{};
+		if (::fcntl(targetFd, F_GETPATH, stored) == 0)
+			link->targetSpellings.emplace_back(stored);
+		::close(targetFd);
+	}
+
+	struct statfs volume{};
+	if (::statfs(target.c_str(), &volume) != 0 || (volume.f_flags & MNT_LOCAL) == 0)
+		coverage = watch_coverage::partial;
+
+	link->stream = createStream(target, onLinkStreamEvents, link.get(), coalescingLatency);
+	if (link->stream == nullptr)
+	{
+		coverage = watch_coverage::partial;
+		return;
+	}
+
+	::FSEventStreamSetDispatchQueue(link->stream, queue);
+	if (!::FSEventStreamStart(link->stream))
+	{
+		// Never started, so no callback of it runs
+		::FSEventStreamInvalidate(link->stream);
+		::FSEventStreamRelease(link->stream);
+		coverage = watch_coverage::partial;
+		return;
+	}
+
+	linkStreams.push_back(std::move(link));
+	followLinksUnder(relativePath);
+}
+
+void directory_watcher::impl::unfollowLinks(const std::string_view relativePath, const bool includingItself) noexcept
+{
+	const auto unfollowed = std::partition(linkStreams.begin(), linkStreams.end(), [&](const auto& link) {
+		return !relativePath.empty() && !(isSameOrUnder(link->path, relativePath) && (includingItself || link->path != relativePath));
+	});
+
+	for (auto link = unfollowed; link != linkStreams.end(); ++link)
+		releaseStream((*link)->stream, queue);
+	linkStreams.erase(unfollowed, linkStreams.end());
+}
+
+void directory_watcher::impl::updateFollowedLinks(const std::vector<watch_event>& events)
+{
+	// A directory that appears may be a link, or hold some
+	const auto appeared = [this](const std::string& path) {
+		if (isFollowableDirectoryLink(root, path))
+		{
+			followLink(path);
+			return;
+		}
+
+		unfollowLinks(path, true); // What appeared may have replaced a followed link
+		if (const auto status = get_entry_status(joinedPath(root, path).c_str(), link_behavior::do_not_follow);
+			status && status->attributes.kind == entry_kind::directory && !status->attributes.is_link)
+			followLinksUnder(path);
+	};
+
+	for (const watch_event& event : events)
+	{
+		switch (event.kind)
+		{
+		case watch_event_kind::created:
+			if (event.entry != entry_kind::regular_file)
+				appeared(event.path);
+			break;
+		case watch_event_kind::removed:
+			unfollowLinks(event.path, true);
+			break;
+		case watch_event_kind::renamed:
+			unfollowLinks(event.old_path, true);
+			if (event.entry != entry_kind::regular_file)
+				appeared(event.path);
+			break;
+		case watch_event_kind::overflow: // Links may have come and gone unreported under the path
+			unfollowLinks(event.path, false);
+			if (isWalkable(event.path))
+				followLinksUnder(event.path);
+			break;
+		default:
+			break;
+		}
+	}
+}
+
+bool directory_watcher::impl::isWalkable(const std::string& relativePath) const
+{
+	if (relativePath.empty() || std::ranges::any_of(linkStreams, [&relativePath](const auto& link) { return link->path == relativePath; }))
+		return true;
+
+	const auto status = get_entry_status(joinedPath(root, relativePath).c_str(), link_behavior::do_not_follow);
+	return status && !status->attributes.is_link;
+}
+
+void directory_watcher::impl::updateFollowedLinksForExclusions(const std::vector<native_string>& previouslyExcluded)
+{
+	for (const native_string& directory : excludedDirectories)
+		unfollowLinks(directory, true);
+
+	for (const native_string& directory : previouslyExcluded)
+	{
+		if (directory.empty() || isExcluded(directory, excludedDirectories))
+			continue;
+		if (isFollowableDirectoryLink(root, directory))
+			followLink(directory);
+		else
+			followLinksUnder(directory);
+	}
 }
 
 filesystem_result<directory_watcher> directory_watcher::watch(const char* const root, watch_options options)
@@ -536,8 +822,12 @@ watch_coverage directory_watcher::coverage() const noexcept
 
 void directory_watcher::set_excluded_directories(std::vector<native_string> directories)
 {
-	if (_impl)
-		_impl->excludedDirectories = normalizedRelativeDirectories(std::move(directories));
+	if (!_impl)
+		return;
+
+	const std::vector<native_string> previous = std::exchange(_impl->excludedDirectories, normalizedRelativeDirectories(std::move(directories)));
+	if (_impl->followDirectoryLinks && !_impl->pendingStop && !_impl->stopDelivered)
+		_impl->updateFollowedLinksForExclusions(previous);
 }
 
 void directory_watcher::release() noexcept

@@ -1,4 +1,5 @@
 #include "directory_watcher_posix.hpp"
+#include "fs.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -48,6 +49,30 @@ std::string joinedPath(const std::string_view directory, const std::string_view 
 bool isSameOrUnder(const std::string_view path, const std::string_view directory) noexcept
 {
 	return path.starts_with(directory) && (path.size() == directory.size() || path[directory.size()] == '/');
+}
+
+bool isFollowableDirectoryLink(const std::string_view root, const std::string_view relativePath)
+{
+	const std::string linkPath = joinedPath(root, relativePath);
+	const auto link = get_entry_status(linkPath.c_str(), link_behavior::do_not_follow);
+	if (!link || !link->attributes.is_link)
+		return false;
+
+	const auto target = get_entry_metadata(linkPath.c_str(), link_behavior::follow);
+	if (!target || target->attributes.kind != entry_kind::directory || !target->identity)
+		return false;
+
+	// From the link's parent up to the root
+	for (std::string_view directory = relativePath; !directory.empty();)
+	{
+		const size_t separator = directory.find_last_of('/');
+		directory = separator == std::string_view::npos ? std::string_view{} : directory.substr(0, separator);
+		const auto onPath = get_entry_metadata(joinedPath(root, directory).c_str(), link_behavior::follow);
+		if (onPath && onPath->identity == target->identity)
+			return false;
+	}
+
+	return true;
 }
 
 bool isExcluded(const std::string_view relativePath, const std::vector<native_string>& excludedDirectories) noexcept

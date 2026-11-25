@@ -191,10 +191,17 @@ changed in metadata alone, and renamed, with paths relative to the root. Impleme
   `directory_snapshot`
   ([`src/directory_snapshot.hpp`](src/directory_snapshot.hpp)): two snapshots of a directory compare unequal when an
   entry was added, removed or renamed, or changed in size, modification time, attributes or permissions.
+- `watch_options::follow_directory_links` watches the subtrees that directory links under the root point to, with the
+  cycle rule of a directory scan. No notification API follows links, so each followed link costs what a root does:
+  a directory handle and a read on Windows, a stream on macOS. Arming walks the whole tree to find them, as Linux
+  always does.
 
 Limits:
 
-- Windows: the root's parent and every further ancestor cannot be renamed while the watch is held.
+- Windows: the root's parent and every further ancestor cannot be renamed while the watch is held, nor can a followed
+  link target's.
+- A followed link's target that moves is not noticed on Windows, nor on Linux when it moves with one of its
+  ancestors: its changes go on being reported under the link's path.
 - Windows: one `wait_for_any()` call takes at most 64 handles: 63 watchers with a waker, 64 without.
 - Linux: every watched directory and every ancestor of a root takes a watch out of `fs.inotify.max_user_watches`, and
   each watcher takes an inotify instance out of `fs.inotify.max_user_instances` (128 by default). Both limits are

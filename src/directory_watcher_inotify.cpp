@@ -60,10 +60,23 @@ struct directory_watcher::impl {
 	void processBuffer(size_t bytes, std::vector<watch_event>* events);
 	void processTreeEvent(const inotify_event& nativeEvent, std::vector<watch_event>* events);
 	void flushMoveSource(std::vector<watch_event>* events);
+	// Entries created or moved in at paths: reported, and a directory or a followed link watched
+	void appear(const std::vector<std::string>& paths, entry_kind kind, bool moved, std::vector<watch_event>* events);
 	// Places a watch on a directory under the root, and on the directories under it. events: the entries found, as created.
 	[[nodiscard]] filesystem_result<void> watchSubtree(const std::string& relativeDirectory, std::vector<watch_event>* events);
 	void unwatchSubtree(std::string_view relativeDirectory) noexcept;
 	void moveWatchedPaths(std::string_view from, std::string_view to);
+	// A non-directory entry appeared at relativePath
+	void followIfDirectoryLink(const std::string& relativePath, std::vector<watch_event>* events);
+	// An entry left relativePath, or another took its place
+	void unfollowLink(const std::string& relativePath) noexcept;
+	// A relative link resolves anew after its directory moves
+	void refollowLinksUnder(std::string_view relativeDirectory);
+	// The directory of descriptor is lost: the links followed to it are followed no more.
+	// reportOverflow: false for a volume going away, so that nothing touches it during an eject.
+	void loseFollowedTargets(int descriptor, bool reportOverflow, std::vector<watch_event>* events);
+	// Whether every path of descriptor's directory goes through a followed link
+	[[nodiscard]] bool isFollowedTargetOnly(int descriptor) const;
 	// events: null when discarding
 	void emit(watch_event event, std::vector<watch_event>* events) const;
 	[[nodiscard]] std::optional<stop_reason> rootLossReason() const;
@@ -73,16 +86,20 @@ struct directory_watcher::impl {
 	std::string root; // Absolute, as given: the root's identity is checked through it
 	std::string realRoot; // The directory the watches are placed on; its ancestors are watched too
 	bool recursive = true;
+	bool followDirectoryLinks = false;
 	std::vector<native_string> excludedDirectories;
 	std::optional<entry_identity> rootId;
 	watch_coverage coverage = watch_coverage::complete;
 	int rootWatch = -1;
-	std::unordered_map<int, std::string> treeWatches; // Directory relative to the root, empty for the root itself
-	std::unordered_set<int> ancestorWatches;
+	// The directory's paths relative to the root, empty for the root itself: more than one when links reach it.
+	// One descriptor per directory: inotify returns the existing one for a directory watched again.
+	std::unordered_map<int, std::vector<std::string>> treeWatches;
+	std::unordered_set<int> ancestorWatches; // Can also be tree watches, reached through a link
+	std::unordered_set<std::string> followedLinks; // Relative to the root
 
 	struct move_source {
 		uint32_t cookie = 0;
-		std::string path;
+		std::vector<std::string> paths;
 		bool isDirectory = false;
 	};
 	std::optional<move_source> moveSource; // An IN_MOVED_FROM waiting for its IN_MOVED_TO
@@ -101,6 +118,7 @@ directory_watcher::impl::~impl()
 filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath, watch_options options)
 {
 	recursive = options.recursive;
+	followDirectoryLinks = options.recursive && options.follow_directory_links;
 	excludedDirectories = normalizedRelativeDirectories(std::move(options.excluded_directories));
 
 	root = rootPath;
@@ -136,7 +154,7 @@ filesystem_result<void> directory_watcher::impl::arm(const char* const rootPath,
 	rootWatch = ::inotify_add_watch(inotifyFd, realRoot.c_str(), treeMask | selfMask);
 	if (rootWatch < 0) [[unlikely]]
 		return std::unexpected{ capture_last_filesystem_error() };
-	treeWatches.emplace(rootWatch, std::string{});
+	treeWatches.emplace(rootWatch, std::vector<std::string>{ std::string{} });
 
 	// A watch follows its inode, so a moved ancestor would go unnoticed without its own watch.
 	for (std::string ancestor = realRoot; ancestor != "/";)
@@ -170,7 +188,10 @@ filesystem_result<void> directory_watcher::impl::watchSubtree(const std::string&
 	const std::string absoluteDirectory = joinedPath(realRoot, relativeDirectory);
 	if (!relativeDirectory.empty())
 	{
-		const int descriptor = ::inotify_add_watch(inotifyFd, absoluteDirectory.c_str(), treeMask);
+		// Through a link, the watch lands on the link's target. Its own move or deletion is watched: no other event reports it.
+		const bool isFollowedLink = followedLinks.contains(relativeDirectory);
+		// IN_MASK_ADD: the directory may be watched already, as an ancestor or under another path
+		const int descriptor = ::inotify_add_watch(inotifyFd, absoluteDirectory.c_str(), treeMask | IN_MASK_ADD | (isFollowedLink ? selfMask : 0));
 		if (descriptor < 0)
 		{
 			if (errno == ENOSPC) [[unlikely]]
@@ -180,7 +201,12 @@ filesystem_result<void> directory_watcher::impl::watchSubtree(const std::string&
 				coverage = watch_coverage::partial;
 			return {};
 		}
-		treeWatches.insert_or_assign(descriptor, relativeDirectory);
+
+		std::vector<std::string>& paths = treeWatches[descriptor];
+		if (std::ranges::find(paths, relativeDirectory) == paths.end())
+			paths.push_back(relativeDirectory);
+		if (isFollowedLink && isRemoteOrVirtual(absoluteDirectory.c_str()))
+			coverage = watch_coverage::partial;
 	}
 
 	// Listed after the watch is placed: an entry made in between is reported twice, never missed.
@@ -197,9 +223,17 @@ filesystem_result<void> directory_watcher::impl::watchSubtree(const std::string&
 		const std::string path = joinedPath(relativeDirectory, entry.name);
 		const bool isDirectory = entry.attributes.kind == entry_kind::directory && !entry.attributes.is_link;
 		emit(watch_event{ .kind = watch_event_kind::created, .entry = entry.attributes.kind, .path = path }, events);
+		if (isExcluded(path, excludedDirectories))
+			continue;
 
-		if (isDirectory && !isExcluded(path, excludedDirectories))
+		if (isDirectory)
 		{
+			if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
+				return placed;
+		}
+		else if (followDirectoryLinks && entry.attributes.is_link && isFollowableDirectoryLink(realRoot, path))
+		{
+			followedLinks.insert(path);
 			if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
 				return placed;
 		}
@@ -210,21 +244,99 @@ filesystem_result<void> directory_watcher::impl::watchSubtree(const std::string&
 
 void directory_watcher::impl::unwatchSubtree(const std::string_view relativeDirectory) noexcept
 {
-	std::erase_if(treeWatches, [&](const auto& watched) {
-		if (watched.first == rootWatch || !isSameOrUnder(watched.second, relativeDirectory))
+	std::erase_if(followedLinks, [relativeDirectory](const std::string& link) { return isSameOrUnder(link, relativeDirectory); });
+	// The root's own path is never under relativeDirectory; a link to one of its ancestors can add more
+	std::erase_if(treeWatches, [&](auto& watched) {
+		std::erase_if(watched.second, [relativeDirectory](const std::string& path) { return isSameOrUnder(path, relativeDirectory); });
+		if (!watched.second.empty() || watched.first == rootWatch)
 			return false;
-		::inotify_rm_watch(inotifyFd, watched.first);
+
+		// An ancestor's watch stays: its root-loss events still matter
+		if (!ancestorWatches.contains(watched.first))
+			::inotify_rm_watch(inotifyFd, watched.first);
 		return true;
 	});
 }
 
 void directory_watcher::impl::moveWatchedPaths(const std::string_view from, const std::string_view to)
 {
-	for (auto& [descriptor, path] : treeWatches)
-	{
-		if (descriptor != rootWatch && isSameOrUnder(path, from))
+	const auto moved = [from, to](std::string& path) {
+		if (isSameOrUnder(path, from))
 			path = std::string{ to } + path.substr(from.size());
+	};
+
+	for (auto& [descriptor, paths] : treeWatches)
+		std::ranges::for_each(paths, moved);
+
+	std::unordered_set<std::string> links;
+	for (std::string link : followedLinks)
+	{
+		moved(link);
+		links.insert(std::move(link));
 	}
+	followedLinks = std::move(links);
+}
+
+void directory_watcher::impl::followIfDirectoryLink(const std::string& relativePath, std::vector<watch_event>* const events)
+{
+	if (!followDirectoryLinks || isExcluded(relativePath, excludedDirectories) || !isFollowableDirectoryLink(realRoot, relativePath))
+		return;
+
+	followedLinks.insert(relativePath);
+	if (auto placed = watchSubtree(relativePath, events); !placed) [[unlikely]]
+		stopWatch(stop_reason::failed, placed.error());
+}
+
+void directory_watcher::impl::unfollowLink(const std::string& relativePath) noexcept
+{
+	if (followedLinks.contains(relativePath))
+		unwatchSubtree(relativePath);
+}
+
+void directory_watcher::impl::refollowLinksUnder(const std::string_view relativeDirectory)
+{
+	std::vector<std::string> links;
+	for (const std::string& link : followedLinks)
+	{
+		if (isSameOrUnder(link, relativeDirectory))
+			links.push_back(link);
+	}
+
+	for (const std::string& link : links)
+	{
+		unfollowLink(link);
+		followIfDirectoryLink(link, nullptr);
+	}
+}
+
+void directory_watcher::impl::loseFollowedTargets(const int descriptor, const bool reportOverflow, std::vector<watch_event>* const events)
+{
+	const auto watched = treeWatches.find(descriptor);
+	if (watched == treeWatches.end())
+		return;
+
+	const std::vector<std::string> paths = watched->second; // Copied: unfollowing edits the watches
+	for (const std::string& path : paths)
+	{
+		if (!followedLinks.contains(path))
+			continue;
+
+		if (reportOverflow)
+			emit(watch_event{ .kind = watch_event_kind::overflow, .path = path }, events);
+		unfollowLink(path);
+		coverage = watch_coverage::partial; // Nothing follows the link again if its target comes back
+	}
+}
+
+bool directory_watcher::impl::isFollowedTargetOnly(const int descriptor) const
+{
+	if (descriptor == rootWatch || ancestorWatches.contains(descriptor))
+		return false;
+
+	const auto watched = treeWatches.find(descriptor);
+	return watched != treeWatches.end() && std::ranges::all_of(watched->second, [this](const std::string& path) {
+		return std::ranges::any_of(followedLinks, [&path](const std::string& link) { return isSameOrUnder(path, link); });
+	});
 }
 
 void directory_watcher::impl::emit(watch_event event, std::vector<watch_event>* const events) const
@@ -279,9 +391,12 @@ void directory_watcher::impl::processBuffer(const size_t bytes, std::vector<watc
 		{
 			flushMoveSource(events);
 			emit(watch_event{ .kind = watch_event_kind::overflow }, events);
-			// Directories made during the overflow have no watch yet
+			// Directories made during the overflow have no watch yet, and links may have come and gone
 			if (recursive)
 			{
+				const std::vector<std::string> links{ followedLinks.begin(), followedLinks.end() };
+				for (const std::string& link : links)
+					unfollowLink(link);
 				if (auto placed = watchSubtree({}, nullptr); !placed) [[unlikely]]
 					stopWatch(stop_reason::failed, placed.error());
 			}
@@ -290,12 +405,19 @@ void directory_watcher::impl::processBuffer(const size_t bytes, std::vector<watc
 
 		if ((nativeEvent.mask & IN_UNMOUNT) != 0)
 		{
+			if (isFollowedTargetOnly(nativeEvent.wd))
+			{
+				loseFollowedTargets(nativeEvent.wd, false, events);
+				continue;
+			}
 			stopWatch(stop_reason::volume_released, {});
 			return;
 		}
 
 		const bool isRoot = nativeEvent.wd == rootWatch;
-		if (ancestorWatches.contains(nativeEvent.wd) || (isRoot && (nativeEvent.mask & selfMask) != 0))
+		const bool selfEvent = (nativeEvent.mask & selfMask) != 0;
+		const bool ignored = (nativeEvent.mask & IN_IGNORED) != 0;
+		if ((ancestorWatches.contains(nativeEvent.wd) && (selfEvent || ignored)) || (isRoot && selfEvent))
 		{
 			// An ancestor or the root moved back leaves the root path on the watched directory.
 			// A deleted root's replacement can reuse its inode number at once, so it compares as the same directory.
@@ -306,11 +428,20 @@ void directory_watcher::impl::processBuffer(const size_t bytes, std::vector<watc
 			continue;
 		}
 
-		if ((nativeEvent.mask & IN_IGNORED) != 0)
+		if (ignored)
 		{
 			if (isRoot)
 				stopWatch(stop_reason::root_lost, {});
+			else
+				loseFollowedTargets(nativeEvent.wd, true, events);
 			treeWatches.erase(nativeEvent.wd);
+			continue;
+		}
+
+		// Only a followed link's target watches its own move or deletion
+		if (selfEvent)
+		{
+			loseFollowedTargets(nativeEvent.wd, true, events);
 			continue;
 		}
 
@@ -327,25 +458,49 @@ void directory_watcher::impl::processTreeEvent(const inotify_event& nativeEvent,
 	if (watched == treeWatches.end() || nativeEvent.len == 0)
 		return;
 
-	const std::string path = joinedPath(watched->second, std::string_view{ nativeEvent.name, ::strnlen(nativeEvent.name, nativeEvent.len) });
+	const std::string_view name{ nativeEvent.name, ::strnlen(nativeEvent.name, nativeEvent.len) };
+	std::vector<std::string> paths; // One per path of the directory: a change through a link is reported at each
+	paths.reserve(watched->second.size());
+	for (const std::string& directory : watched->second)
+		paths.push_back(joinedPath(directory, name));
+
 	const bool isDirectory = (nativeEvent.mask & IN_ISDIR) != 0;
 	const entry_kind kind = isDirectory ? entry_kind::directory : entry_kind::unknown;
 
 	if ((nativeEvent.mask & IN_MOVED_TO) != 0 && moveSource && moveSource->cookie == nativeEvent.cookie)
 	{
-		const move_source source = *std::exchange(moveSource, std::nullopt);
+		move_source source = *std::exchange(moveSource, std::nullopt);
+		// Through links, the old and new paths do not pair up: the move is reported as a removal and a creation
+		if (source.paths.size() != 1 || paths.size() != 1)
+		{
+			moveSource = std::move(source);
+			flushMoveSource(events);
+			appear(paths, kind, true, events);
+			return;
+		}
+
+		const std::string& oldPath = source.paths.front();
+		const std::string& path = paths.front();
+		unfollowLink(path); // inotify reports no removal of an entry a move replaces
 		if (isDirectory)
 		{
-			moveWatchedPaths(source.path, path);
+			moveWatchedPaths(oldPath, path);
 			if (isExcluded(path, excludedDirectories))
 				unwatchSubtree(path);
-			else if (recursive && isExcluded(source.path, excludedDirectories))
+			else if (recursive && isExcluded(oldPath, excludedDirectories))
 			{
 				if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
 					stopWatch(stop_reason::failed, placed.error());
 			}
+			else
+				refollowLinksUnder(path);
 		}
-		emit(watch_event{ .kind = watch_event_kind::renamed, .entry = kind, .path = path, .old_path = source.path }, events);
+		else
+		{
+			unfollowLink(oldPath);
+			followIfDirectoryLink(path, events);
+		}
+		emit(watch_event{ .kind = watch_event_kind::renamed, .entry = kind, .path = path, .old_path = oldPath }, events);
 		return;
 	}
 
@@ -353,25 +508,52 @@ void directory_watcher::impl::processTreeEvent(const inotify_event& nativeEvent,
 
 	if ((nativeEvent.mask & IN_MOVED_FROM) != 0)
 	{
-		moveSource = move_source{ .cookie = nativeEvent.cookie, .path = path, .isDirectory = isDirectory };
+		moveSource = move_source{ .cookie = nativeEvent.cookie, .paths = std::move(paths), .isDirectory = isDirectory };
 		return;
 	}
 
 	if ((nativeEvent.mask & (IN_CREATE | IN_MOVED_TO)) != 0)
+		appear(paths, kind, (nativeEvent.mask & IN_MOVED_TO) != 0, events);
+	else if ((nativeEvent.mask & IN_DELETE) != 0)
 	{
+		for (const std::string& path : paths)
+		{
+			if (!isDirectory)
+				unfollowLink(path);
+			emit(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = path }, events);
+		}
+	}
+	else if ((nativeEvent.mask & IN_MODIFY) != 0)
+	{
+		for (const std::string& path : paths)
+			emit(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = path }, events);
+	}
+	else if ((nativeEvent.mask & IN_ATTRIB) != 0)
+	{
+		for (const std::string& path : paths)
+			emit(watch_event{ .kind = watch_event_kind::metadata_changed, .entry = kind, .path = path }, events);
+	}
+}
+
+void directory_watcher::impl::appear(const std::vector<std::string>& paths, const entry_kind kind, const bool moved, std::vector<watch_event>* const events)
+{
+	for (const std::string& path : paths)
+	{
+		if (moved)
+			unfollowLink(path); // inotify reports no removal of an entry a move replaces
 		emit(watch_event{ .kind = watch_event_kind::created, .entry = kind, .path = path }, events);
-		if (isDirectory && recursive && !isExcluded(path, excludedDirectories))
+		if (kind != entry_kind::directory)
+		{
+			// A link created here may have been followed already, by the walk of a directory created around it
+			if (!followedLinks.contains(path))
+				followIfDirectoryLink(path, events);
+		}
+		else if (recursive && !isExcluded(path, excludedDirectories))
 		{
 			if (auto placed = watchSubtree(path, events); !placed) [[unlikely]]
 				stopWatch(stop_reason::failed, placed.error());
 		}
 	}
-	else if ((nativeEvent.mask & IN_DELETE) != 0)
-		emit(watch_event{ .kind = watch_event_kind::removed, .entry = kind, .path = path }, events);
-	else if ((nativeEvent.mask & IN_MODIFY) != 0)
-		emit(watch_event{ .kind = watch_event_kind::modified, .entry = kind, .path = path }, events);
-	else if ((nativeEvent.mask & IN_ATTRIB) != 0)
-		emit(watch_event{ .kind = watch_event_kind::metadata_changed, .entry = kind, .path = path }, events);
 }
 
 // An IN_MOVED_FROM without its IN_MOVED_TO moved out of the tree.
@@ -381,10 +563,14 @@ void directory_watcher::impl::flushMoveSource(std::vector<watch_event>* const ev
 		return;
 
 	const move_source source = *std::exchange(moveSource, std::nullopt);
-	if (source.isDirectory)
-		unwatchSubtree(source.path);
-	emit(watch_event{ .kind = watch_event_kind::removed,
-		.entry = source.isDirectory ? entry_kind::directory : entry_kind::unknown, .path = source.path }, events);
+	for (const std::string& path : source.paths)
+	{
+		if (source.isDirectory)
+			unwatchSubtree(path);
+		else
+			unfollowLink(path);
+		emit(watch_event{ .kind = watch_event_kind::removed, .entry = source.isDirectory ? entry_kind::directory : entry_kind::unknown, .path = path }, events);
+	}
 }
 
 // Empty while the root path still resolves to the watched directory. An unknown identity never matches.
@@ -486,11 +672,14 @@ void directory_watcher::set_excluded_directories(std::vector<native_string> dire
 	// A directory leaving the list gets its watches back, and reports nothing for what it already holds.
 	for (const native_string& directory : previous)
 	{
-		if (!directory.empty() && !isExcluded(directory, watcher.excludedDirectories))
-		{
-			if (auto placed = watcher.watchSubtree(directory, nullptr); !placed) [[unlikely]]
-				watcher.stopWatch(stop_reason::failed, placed.error());
-		}
+		if (directory.empty() || isExcluded(directory, watcher.excludedDirectories))
+			continue;
+
+		// A link is watched only as a followed one
+		if (const auto status = get_entry_status(joinedPath(watcher.realRoot, directory).c_str(), link_behavior::do_not_follow); status && status->attributes.is_link)
+			watcher.followIfDirectoryLink(directory, nullptr);
+		else if (auto placed = watcher.watchSubtree(directory, nullptr); !placed) [[unlikely]]
+			watcher.stopWatch(stop_reason::failed, placed.error());
 	}
 }
 
